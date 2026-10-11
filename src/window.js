@@ -67,6 +67,7 @@ class Tab {
       this.scanMedia()
     })
     wc.on('did-navigate', (_e, url, httpCode) => {
+      this.ctx.media.clear(wc.id)
       this.crashed = false
       this.favicon = ''
       this.media = { count: 0, ytdlp: false }
@@ -152,6 +153,12 @@ class Tab {
       }
     }
     return { action: 'allow' }
+  }
+
+  // Gom nhiều lần bắt được link liên tiếp thành một lần quét.
+  scheduleMediaScan() {
+    clearTimeout(this.mediaTimer)
+    this.mediaTimer = setTimeout(() => this.scanMedia(), 600)
   }
 
   async scanMedia() {

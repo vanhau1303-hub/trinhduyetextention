@@ -67,6 +67,22 @@
         </div>
       </div>
 
+      <h2>DNS bảo mật (chống chặn web)</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Phân giải tên miền qua DNS-over-HTTPS</div><div class="desc">Hỏi địa chỉ trang web qua kết nối mã hoá tới Cloudflare/Google… thay vì DNS của nhà mạng, nên các trang bị chặn bằng DNS vẫn vào được. Áp dụng ngay, không cần khởi động lại.</div></div>
+          <select id="secureDns"></select>
+        </div>
+        <div class="row" id="dns-custom-row">
+          <div class="grow"><div class="label">Địa chỉ DoH tuỳ chỉnh</div><div class="desc">Ví dụ: https://dns.nextdns.io/abc123</div></div>
+          <input type="text" id="secureDnsCustom" style="width:320px" placeholder="https://…/dns-query" />
+        </div>
+        <div class="row">
+          <div class="grow"><div class="label">Kiểm tra</div><div class="desc" id="dns-check">Mở trang kiểm tra của Cloudflare để xem trình duyệt có đang dùng DNS mã hoá không.</div></div>
+          <button class="btn" id="dns-test">Kiểm tra</button>
+        </div>
+      </div>
+
       <h2>Tải xuống</h2>
       <div class="card">
         <div class="row">

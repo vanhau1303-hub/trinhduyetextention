@@ -8,7 +8,8 @@ Trình duyệt nền Chromium (Electron 44 / Chromium 152) chạy được **ext
 | --- | --- |
 | Extension Chrome | Cài thẳng từ **Chrome Web Store** (nút "Thêm vào Chrome"), hỗ trợ Manifest V2 + V3, nút extension + popup trên thanh công cụ, menu chuột phải của extension, trang Tuỳ chọn, bật/tắt/gỡ, tải extension đã giải nén, tự cập nhật |
 | Chuyển từ trình duyệt khác | **Nhập extension từ Cốc Cốc / Chrome / Edge / Brave** đang cài trên máy (cài lại bản mới từ Store, hoặc chép bản trên máy nếu không có trên Store) |
-| Tải video (kiểu Cốc Cốc Savior) | Nút **"Tải video"** hiện trên thanh địa chỉ khi trang có video. File mp4/webm/mp3 trực tiếp tải ngay; YouTube, Facebook, TikTok, Instagram, X… tải qua **yt-dlp** + **ffmpeg** (tự tải về ở lần đầu dùng), chọn chất lượng 1080p/720p/480p hoặc chỉ MP3 |
+| Tải video (kiểu Cốc Cốc Savior) | Nút **"Tải video"** hiện trên thanh địa chỉ khi trang có video. Bắt link từ thẻ video trong mọi khung (iframe), từ API trình phát (**JW Player**, Video.js, Plyr, Flowplayer, hls.js) và từ luồng mạng. File mp4/webm/mp3 trực tiếp tải ngay (kèm Referer); luồng HLS/DASH (m3u8/mpd) được ghép thành MP4; YouTube, Facebook, TikTok, Instagram, X… tải qua **yt-dlp** + **ffmpeg** (tự tải về ở lần đầu dùng), chọn chất lượng 1080p/720p/480p hoặc chỉ MP3 |
+| DNS bảo mật | Phân giải tên miền qua **DNS-over-HTTPS** (Cloudflare 1.1.1.1 — mặc định, Google 8.8.8.8, Quad9, AdGuard hoặc địa chỉ tuỳ chỉnh) để vào được các trang bị nhà mạng chặn bằng DNS. Đổi trong Cài đặt hoặc Menu → Công cụ khác, áp dụng ngay |
 | Dịch | Bôi đen → chuột phải → **"Dịch sang Tiếng Việt"** hiện bong bóng dịch ngay trên trang (có nút Đọc, Sao chép); nút **Dịch trang** trên thanh địa chỉ |
 | Chặn quảng cáo | Tích hợp sẵn (EasyList + EasyPrivacy, bộ lọc Ghostery), bật/tắt bằng nút khiên, hiện số yêu cầu đã chặn |
 | Giao diện | Tab kéo-thả, ghim tab, tắt tiếng tab, thanh dấu trang, chủ đề sáng/tối theo Windows, ép trang web sang chế độ tối, trang Tab mới có đồng hồ + ô truy cập nhanh + hình nền tuỳ chọn |
@@ -44,6 +45,7 @@ Electron không phải Chrome đầy đủ, nên một số API extension chưa 
 - Khi bật chặn quảng cáo tích hợp, extension dùng `chrome.webRequest` để chặn/sửa yêu cầu mạng có thể không nhận được sự kiện. Nếu gặp, tắt chặn quảng cáo trong Cài đặt.
 - Chưa có: `chrome.commands` (phím tắt của extension), `chrome.identity` (đăng nhập Google trong extension), `chrome.sidePanel`, `tabs.captureVisibleTab`.
 - Google có thể chặn đăng nhập tài khoản Google trong trình duyệt nhúng ("Trình duyệt này có thể không an toàn"). Chưa kiểm tra.
+- DNS bảo mật chỉ vượt được kiểu chặn bằng DNS; trang bị chặn theo IP hoặc SNI vẫn cần VPN.
 - Không có đồng bộ tài khoản (Chrome Sync) và chế độ ẩn danh chưa hỗ trợ extension.
 
 ## Cấu trúc

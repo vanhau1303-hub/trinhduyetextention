@@ -1,6 +1,6 @@
 {
   "name": "metal-browser",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Trình duyệt chạy được extension Chrome, kèm tính năng kiểu Cốc Cốc (tải video, dịch nhanh, chặn quảng cáo)",
   "main": "src/main.js",
   "scripts": {

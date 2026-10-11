@@ -1,9 +1,12 @@
 // Tải video/nhạc từ trang web (giống Cốc Cốc Savior).
-// - File media trực tiếp (mp4, webm, mp3...) tải bằng trình tải xuống có sẵn.
-// - YouTube, Facebook, TikTok... (luồng blob/HLS) tải bằng yt-dlp.
+// - Bắt link media từ 3 nguồn: thẻ <video>/<audio> trong mọi frame, API của trình phát
+//   (JW Player, Video.js, Plyr, Flowplayer, Clappr) và luồng mạng (theo Content-Type).
+// - File trực tiếp (mp4, webm, mp3...) tải bằng trình tải xuống có sẵn (kèm Referer).
+// - Luồng HLS/DASH (m3u8/mpd) và YouTube, Facebook, TikTok... tải bằng yt-dlp + ffmpeg.
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { EventEmitter } = require('node:events')
 const { spawn, execFile } = require('node:child_process')
 const { app, net } = require('electron')
 const AdmZip = require('adm-zip')
@@ -19,45 +22,97 @@ const YTDLP_SITES = [
   'dantri.com.vn', 'tuoitre.vn', 'pinterest.com', 'bandcamp.com', 'mixcloud.com',
 ]
 
-// Chạy trong isolated world của trang để liệt kê media; không ảnh hưởng script của trang.
-const SCAN_SCRIPT = `(() => {
-  const out = new Map()
-  const MEDIA_RE = /\\.(mp4|webm|m4v|mov|mkv|flv|m3u8|mpd|mp3|m4a|aac|ogg|oga|opus|wav|flac)(\\?|#|$)/i
-  const add = (url, type, info = {}) => {
-    if (!url || typeof url !== 'string') return
-    if (!/^https?:/i.test(url)) return
-    if (/googlevideo\\.com|\\.m4s(\\?|$)|\\/range\\//i.test(url)) return
-    const prev = out.get(url)
-    out.set(url, { url, type, ...(prev || {}), ...info })
-  }
+const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)(\?|#|$)/i
+const MEDIA_EXT = /\.(mp4|webm|m4v|mov|mkv|flv|m3u8|mpd|mp3|m4a|aac|ogg|oga|opus|wav|flac)(\?|#|$)/i
+// Mảnh nhỏ của luồng (segment) và YouTube (đã có yt-dlp lo) thì bỏ qua.
+const IGNORE_RE = /googlevideo\.com|\.(ts|m4s|aac\.ts)(\?|$)|\/range\/|[?&]range=|\/seg-?\d+|\/segment\d+|\/chunk[-_]?\d+/i
+
+function streamKind(url, contentType = '') {
+  const ct = contentType.toLowerCase()
+  if (/mpegurl/.test(ct) || /\.m3u8(\?|#|$)/i.test(url)) return 'hls'
+  if (/dash\+xml/.test(ct) || /\.mpd(\?|#|$)/i.test(url)) return 'dash'
+  return ''
+}
+
+// Chạy trong MỌI frame (main world) để đọc được đối tượng của trình phát trên trang.
+const FRAME_SCRIPT = `(() => {
+  const out = []
+  const abs = (u) => { try { return new URL(u, location.href).href } catch { return '' } }
+  const add = (url, info = {}) => { url = abs(url); if (/^https?:/i.test(url)) out.push({ url, ...info }) }
   for (const el of document.querySelectorAll('video, audio')) {
     const info = { tag: el.tagName.toLowerCase(), width: el.videoWidth || 0, height: el.videoHeight || 0,
       duration: Number.isFinite(el.duration) ? Math.round(el.duration) : 0 }
-    add(el.currentSrc, info.tag, info)
-    add(el.getAttribute('src') && el.src, info.tag, info)
-    for (const s of el.querySelectorAll('source')) add(s.src, info.tag, info)
+    if (el.currentSrc) add(el.currentSrc, info)
+    if (el.getAttribute('src')) add(el.getAttribute('src'), info)
+    for (const s of el.querySelectorAll('source')) add(s.getAttribute('src'), { ...info, label: s.getAttribute('label') || s.getAttribute('res') || '' })
   }
-  const blobVideos = [...document.querySelectorAll('video')].filter(v => (v.currentSrc || '').startsWith('blob:')).length
+  // JW Player: lấy playlist (kể cả nhiều chất lượng) trực tiếp từ API của trình phát.
   try {
-    for (const e of performance.getEntriesByType('resource')) {
-      if (MEDIA_RE.test(e.name) || e.initiatorType === 'video' || e.initiatorType === 'audio') {
-        const m = e.name.match(MEDIA_RE)
-        add(e.name, m && /mp3|m4a|aac|ogg|oga|opus|wav|flac/i.test(m[1]) ? 'audio' : 'video', { size: e.transferSize || 0 })
+    if (typeof window.jwplayer === 'function') {
+      for (let i = 0; i < 8; i++) {
+        const p = window.jwplayer(i)
+        if (!p || typeof p.getPlaylist !== 'function') break
+        for (const it of p.getPlaylist() || []) {
+          const title = it.title || ''
+          for (const s of [...(it.sources || []), ...(it.allSources || [])]) add(s.file, { player: 'JW Player', label: s.label && !/^[0-9]+$/.test(String(s.label)) ? String(s.label) : '', title, mime: s.type || '' })
+          if (it.file) add(it.file, { player: 'JW Player', title })
+        }
       }
     }
   } catch {}
-  const videoCount = document.querySelectorAll('video').length
-  return { items: [...out.values()].slice(0, 30), blobVideos, videoCount }
+  try { if (window.videojs && videojs.getPlayers) for (const p of Object.values(videojs.getPlayers())) if (p) { const s = p.currentSources ? p.currentSources() : []; for (const x of s) add(x.src, { player: 'Video.js', mime: x.type || '' }); if (p.currentSrc) add(p.currentSrc(), { player: 'Video.js' }) } } catch {}
+  try { for (const p of (window.Plyr && Plyr.instances) || []) add(p.source, { player: 'Plyr' }) } catch {}
+  try { if (window.flowplayer && flowplayer.instances) for (const p of flowplayer.instances) for (const s of (p.video && p.video.sources) || []) add(s.src, { player: 'Flowplayer' }) } catch {}
+  try { for (const k of Object.keys(window)) { const v = window[k]; if (v && v.constructor && v.constructor.name === 'Hls' && v.url) add(v.url, { player: 'hls.js' }) } } catch {}
+  const videos = [...document.querySelectorAll('video')]
+  return { items: out, videoCount: videos.length, blobVideos: videos.filter((v) => (v.currentSrc || '').startsWith('blob:')).length, frameUrl: location.href }
 })()`
 
-class MediaTools {
+class MediaTools extends EventEmitter {
   constructor(downloads, session) {
+    super()
     this.downloads = downloads
     this.session = session
     this.binDir = path.join(app.getPath('userData'), 'bin')
     this.ytdlpPath = path.join(this.binDir, 'yt-dlp.exe')
     this.installing = {}
     this.ffmpeg = undefined
+    this.sniffed = new Map() // webContentsId -> Map(url -> item)
+  }
+
+  // Nghe phản hồi mạng để bắt link media mà trang tải bằng JS (HLS của JW Player, link không có đuôi...).
+  // Dùng onResponseStarted vì bộ chặn quảng cáo đã chiếm onBeforeRequest/onHeadersReceived.
+  attachSniffer() {
+    this.session.webRequest.onResponseStarted({ urls: ['http://*/*', 'https://*/*'] }, (d) => {
+      if (!d.webContentsId || d.statusCode >= 400 || IGNORE_RE.test(d.url)) return
+      const headers = d.responseHeaders || {}
+      const header = (name) => {
+        const key = Object.keys(headers).find((k) => k.toLowerCase() === name)
+        return key ? String(headers[key][0] || '') : ''
+      }
+      const ct = header('content-type').toLowerCase()
+      const kind = streamKind(d.url, ct)
+      let type = ''
+      if (kind) type = 'video'
+      else if (/^video\/(?!mp2t|iso\.segment)/.test(ct)) type = 'video'
+      else if (/^audio\//.test(ct) && !/mp2t/.test(ct)) type = 'audio'
+      else if (d.resourceType === 'media' && MEDIA_EXT.test(d.url)) type = AUDIO_EXT.test(d.url) ? 'audio' : 'video'
+      if (!type) return
+      let size = Number(header('content-length')) || 0
+      const range = header('content-range').match(/\/(\d+)$/)
+      if (range) size = Number(range[1])
+      let list = this.sniffed.get(d.webContentsId)
+      if (!list) this.sniffed.set(d.webContentsId, (list = new Map()))
+      if (list.size >= 60 && !list.has(d.url)) return
+      const prev = list.get(d.url)
+      list.set(d.url, { ...prev, url: d.url, type, stream: kind, size: Math.max(size, prev?.size || 0), mime: ct, referer: d.referrer || prev?.referer || '', source: 'network', partial: d.statusCode === 206 })
+      if (!prev) this.emit('found', d.webContentsId)
+    })
+  }
+
+  // Gọi khi tab chuyển sang trang khác.
+  clear(webContentsId) {
+    this.sniffed.delete(webContentsId)
   }
 
   isYtdlpSite(url) {
@@ -73,14 +128,55 @@ class MediaTools {
     if (!webContents || webContents.isDestroyed()) return { items: [], ytdlp: false }
     const url = webContents.getURL()
     if (!/^https?:/i.test(url)) return { items: [], ytdlp: false }
-    let result = { items: [], blobVideos: 0, videoCount: 0 }
-    try {
-      result = await webContents.executeJavaScriptInIsolatedWorld(1001, [{ code: SCAN_SCRIPT }])
-    } catch {
-      // Trang đang chuyển hướng hoặc bị chặn script.
+    const merged = new Map()
+    const put = (item) => {
+      if (!item.url || IGNORE_RE.test(item.url)) return
+      const prev = merged.get(item.url) || {}
+      const next = { ...prev, ...Object.fromEntries(Object.entries(item).filter(([, v]) => v !== '' && v !== 0 && v != null)) }
+      next.stream = next.stream || streamKind(next.url, next.mime)
+      next.type = next.type || (AUDIO_EXT.test(next.url) || next.tag === 'audio' ? 'audio' : 'video')
+      merged.set(item.url, next)
     }
-    const ytdlp = this.isYtdlpSite(url) || result.blobVideos > 0 || result.videoCount > 0
-    return { ...result, ytdlp, pageUrl: url, title: webContents.getTitle() }
+    let videoCount = 0
+    let blobVideos = 0
+    let frames = []
+    try {
+      frames = webContents.mainFrame.framesInSubtree
+    } catch {}
+    await Promise.all(
+      frames.map(async (frame) => {
+        try {
+          const r = await Promise.race([frame.executeJavaScript(FRAME_SCRIPT), new Promise((res) => setTimeout(() => res(null), 1500))])
+          if (!r) return
+          videoCount += r.videoCount
+          blobVideos += r.blobVideos
+          for (const it of r.items) put({ ...it, referer: r.frameUrl })
+        } catch {
+          // Frame đang tải lại hoặc chặn script.
+        }
+      })
+    )
+    for (const it of this.sniffed.get(webContents.id)?.values() || []) put(it)
+    let all = [...merged.values()]
+    // Đã có manifest HLS/DASH thì các mảnh tải theo byte-range (chỉ hình hoặc chỉ tiếng) là thừa.
+    if (all.some((m) => m.stream)) all = all.filter((m) => m.stream || !m.partial)
+    // Luồng HLS/DASH lên đầu (thường là bản đầy đủ), rồi đến file lớn.
+    const items = all
+      .sort((a, b) => (b.stream ? 1 : 0) - (a.stream ? 1 : 0) || (parseInt(b.label) || b.height || 0) - (parseInt(a.label) || a.height || 0) || (b.size || 0) - (a.size || 0))
+      .slice(0, 40)
+    const ytdlp = this.isYtdlpSite(url) || blobVideos > 0 || videoCount > 0
+    return { items, videoCount, blobVideos, ytdlp, pageUrl: url, title: webContents.getTitle() }
+  }
+
+  // Tải 1 link media đã bắt được. Link trực tiếp dùng trình tải xuống; luồng HLS/DASH dùng yt-dlp.
+  async downloadItem(webContents, item, quality = 'best') {
+    const pageUrl = webContents.getURL()
+    const referer = item.referer || pageUrl
+    if (!item.stream) {
+      webContents.downloadURL(item.url, { headers: { Referer: referer } })
+      return null
+    }
+    return this.downloadWithYtdlp(item.url, webContents.getTitle(), quality, { referer, cookieUrls: [pageUrl, item.url] })
   }
 
   hasYtdlp() {
@@ -176,15 +272,21 @@ class MediaTools {
   }
 
   // Xuất cookie của trang (định dạng Netscape) để yt-dlp tải được video cần đăng nhập.
-  async writeCookies(pageUrl) {
-    let host
-    try {
-      host = new URL(pageUrl).hostname
-    } catch {
-      return null
+  async writeCookies(urls) {
+    const bases = new Set()
+    for (const u of [].concat(urls)) {
+      try {
+        bases.add(new URL(u).hostname.split('.').slice(-2).join('.'))
+      } catch {}
     }
-    const base = host.split('.').slice(-2).join('.')
-    const cookies = await this.session.cookies.get({ domain: base })
+    const cookies = []
+    const seen = new Set()
+    for (const base of bases) {
+      for (const c of await this.session.cookies.get({ domain: base })) {
+        const key = `${c.domain}|${c.path}|${c.name}`
+        if (!seen.has(key)) seen.add(key), cookies.push(c)
+      }
+    }
     if (!cookies.length) return null
     const lines = ['# Netscape HTTP Cookie File']
     for (const c of cookies) {
@@ -215,22 +317,29 @@ class MediaTools {
     return ['-f', `b${h}[ext=mp4]/b${h}/b`]
   }
 
+  // target: link trang (YouTube, Facebook...) hoặc link luồng m3u8/mpd.
   // quality: 'best' | '1080' | '720' | '480' | 'audio'
-  async downloadWithYtdlp(pageUrl, title, quality = 'best') {
-    const d = this.downloads.add({ kind: 'ytdlp', url: pageUrl, filename: title || pageUrl, path: '' })
+  // opts.referer: gửi kèm Referer/Origin (trang dùng JW Player thường chặn tải nếu thiếu).
+  async downloadWithYtdlp(target, title, quality = 'best', opts = {}) {
+    const d = this.downloads.add({ kind: 'ytdlp', url: target, filename: title || target, path: '' })
     try {
       if (!this.hasYtdlp()) await this.installYtdlp()
       let ffmpeg = await this.findFfmpeg()
-      // Đổi sang MP3 bắt buộc cần ffmpeg.
-      if (!ffmpeg && quality === 'audio') ffmpeg = await this.installFfmpeg()
-      const result = await this.runYtdlp(d, pageUrl, quality, ffmpeg)
-      // YouTube không còn định dạng gộp sẵn hình + tiếng: tự tải ffmpeg rồi thử lại.
-      if (result.formatMissing && !ffmpeg && d.state !== 'cancelled') {
-        d.filename = `${title || pageUrl} (đang chuẩn bị ffmpeg…)`
+      // MP3 và luồng HLS/DASH (ghép hình + tiếng, đổi sang mp4) cần ffmpeg.
+      if (!ffmpeg && (quality === 'audio' || opts.referer)) {
+        d.filename = `${title || target} (đang chuẩn bị ffmpeg…)`
         this.downloads.changed()
         ffmpeg = await this.installFfmpeg()
-        d.filename = title || pageUrl
-        await this.runYtdlp(d, pageUrl, quality, ffmpeg)
+        d.filename = title || target
+      }
+      const result = await this.runYtdlp(d, target, quality, ffmpeg, opts, title)
+      // YouTube không còn định dạng gộp sẵn hình + tiếng: tự tải ffmpeg rồi thử lại.
+      if (result.formatMissing && !ffmpeg && d.state !== 'cancelled') {
+        d.filename = `${title || target} (đang chuẩn bị ffmpeg…)`
+        this.downloads.changed()
+        ffmpeg = await this.installFfmpeg()
+        d.filename = title || target
+        await this.runYtdlp(d, target, quality, ffmpeg, opts, title)
       }
     } catch (err) {
       if (d.state !== 'cancelled') {
@@ -242,17 +351,35 @@ class MediaTools {
     return d
   }
 
-  async runYtdlp(d, pageUrl, quality, ffmpeg) {
+  // Tên file cho link luồng: lấy theo tiêu đề trang, không trùng file đã có.
+  streamOutputName(title, quality) {
+    const ext = quality === 'audio' ? 'mp3' : 'mp4'
+    const unique = this.downloads.uniquePath(this.downloads.dir, `${(title || 'video').slice(0, 120)}.${ext}`)
+    return `${path.basename(unique, `.${ext}`).replace(/%/g, '%%')}.%(ext)s`
+  }
+
+  async runYtdlp(d, target, quality, ffmpeg, opts = {}, title = '') {
+    const output = opts.referer ? this.streamOutputName(title, quality) : '%(title).150B [%(id)s].%(ext)s'
     const args = ['--no-playlist', '--newline', '--progress', '--encoding', 'utf-8', '--no-mtime',
-      '-P', this.downloads.dir, '-o', '%(title).150B [%(id)s].%(ext)s',
+      '-P', this.downloads.dir, '-o', output,
       '--progress-template', 'download:METALPROG %(progress._percent_str)s|%(progress._speed_str)s|%(progress._total_bytes_str)s|%(progress._total_bytes_estimate_str)s',
       '--print', 'after_move:METALFILE %(filepath)s',
       // YouTube cần JS runtime để giải mã chữ ký; dùng chính Electron ở chế độ Node.
       '--js-runtimes', `node:${process.execPath}`,
+      '--user-agent', this.session.getUserAgent(),
       ...this.formatArgs(quality, ffmpeg)]
-    const cookieFile = await this.writeCookies(pageUrl).catch(() => null)
+    if (opts.referer) {
+      args.push('--referer', opts.referer)
+      try {
+        args.push('--add-header', `Origin:${new URL(opts.referer).origin}`)
+      } catch {}
+      // Tải nhiều mảnh song song cho nhanh.
+      args.push('--concurrent-fragments', '4')
+      if (ffmpeg && quality !== 'audio') args.push('--remux-video', 'mp4')
+    }
+    const cookieFile = await this.writeCookies(opts.cookieUrls || [target]).catch(() => null)
     if (cookieFile) args.push('--cookies', cookieFile)
-    args.push(pageUrl)
+    args.push(target)
 
     d.state = 'progressing'
     d.error = ''
@@ -266,13 +393,13 @@ class MediaTools {
       line = line.trim()
       if (!line) return
       if (line.startsWith('METALPROG ')) {
-        const [pct, speed, total, est] = line.slice(8).split('|').map((s) => s.trim())
+        const [pct, speed, total, est] = line.slice('METALPROG '.length).split('|').map((s) => s.trim())
         d.percent = parseFloat(pct) || d.percent
         d.speed = speed && !/NA|Unknown/i.test(speed) ? speed : ''
         d.sizeText = !/NA/.test(total) ? total : !/NA/.test(est) ? `~${est}` : ''
         this.downloads.changed()
       } else if (line.startsWith('METALFILE ')) {
-        d.path = line.slice(8)
+        d.path = line.slice('METALFILE '.length)
         d.filename = path.basename(d.path)
       } else if (/^\[download\] Destination: /.test(line)) {
         d.filename = path.basename(line.replace('[download] Destination: ', ''))

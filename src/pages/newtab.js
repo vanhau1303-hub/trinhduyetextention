@@ -101,6 +101,7 @@ $('#bg-clear').addEventListener('click', async () => {
   setInterval(tick, 1000)
   settings = await api('getSettings')
   const engine = settings.engines?.[settings.searchEngine]
+  $('#version').textContent = `Metal Browser v${settings.version}`
   $('#engine').textContent = engine ? `Tìm kiếm bằng ${engine.name}` : ''
   applyBackground()
   renderTiles()

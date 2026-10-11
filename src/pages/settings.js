@@ -10,6 +10,11 @@ function fill() {
     .join('')
   $('#uiTheme').value = s.uiTheme || 'system'
   $('#translateTarget').value = s.translateTarget || 'vi'
+  $('#secureDns').innerHTML = Object.entries(s.dnsProviders || {})
+    .map(([k, p]) => `<option value="${esc(k)}" ${k === s.secureDns ? 'selected' : ''}>${esc(p.name)}</option>`)
+    .join('')
+  $('#secureDnsCustom').value = s.secureDnsCustom || ''
+  $('#dns-custom-row').classList.toggle('hidden', s.secureDns !== 'custom')
 }
 
 async function refreshTools() {
@@ -51,6 +56,19 @@ $('#homepage').addEventListener('change', (e) => {
 })
 $('#searchEngine').addEventListener('change', (e) => api('setSetting', 'searchEngine', e.target.value))
 $('#uiTheme').addEventListener('change', (e) => api('setSetting', 'uiTheme', e.target.value))
+$('#secureDns').addEventListener('change', (e) => {
+  s.secureDns = e.target.value
+  $('#dns-custom-row').classList.toggle('hidden', s.secureDns !== 'custom')
+  api('setSetting', 'secureDns', e.target.value)
+  toast(e.target.value === 'off' ? 'Đã tắt DNS bảo mật' : 'Đã bật DNS bảo mật')
+})
+$('#secureDnsCustom').addEventListener('change', (e) => {
+  const v = e.target.value.trim()
+  if (v && !v.startsWith('https://')) return toast('Địa chỉ phải bắt đầu bằng https://')
+  api('setSetting', 'secureDnsCustom', v)
+  toast('Đã lưu DNS tuỳ chỉnh')
+})
+$('#dns-test').addEventListener('click', () => api('openUrl', 'https://one.one.one.one/help/'))
 $('#translateTarget').addEventListener('change', (e) => api('setSetting', 'translateTarget', e.target.value))
 
 $('#choose-dir').addEventListener('click', async () => {

@@ -340,44 +340,52 @@ async function openMediaPanel() {
   const res = await ui.invoke('scan-media')
   if (openPanel !== mediaPanel) return
   const items = res.items || []
-  const quality = `<select id="yt-quality">
+  const quality = `<select id="yt-quality" title="Chất lượng khi tải luồng (HLS/DASH) hoặc tải qua yt-dlp">
       <option value="best">Chất lượng cao nhất</option>
       <option value="1080">1080p</option>
       <option value="720">720p</option>
       <option value="480">480p</option>
-      <option value="audio">Chỉ âm thanh${res.hasFfmpeg ? ' (MP3)' : ''}</option>
+      <option value="audio">Chỉ âm thanh (MP3)</option>
     </select>`
   let html = `<div class="panel-head">Tải video / nhạc <small>${items.length} tệp tìm thấy</small></div><div class="panel-body">`
-  if (res.ytdlp) {
+  if (res.ytdlp || items.some((m) => m.stream)) {
     html += `<div class="ytdlp-box">
-      <div class="row">${quality}<button class="btn" id="yt-go">Tải video trang này</button></div>
-      <div class="panel-note" style="padding:6px 2px 0">Hỗ trợ YouTube, Facebook, TikTok, Instagram, X… ${res.hasYtdlp ? '' : 'Lần đầu sẽ tự tải công cụ yt-dlp (~18 MB).'} ${res.hasFfmpeg ? '' : 'Chưa có ffmpeg: video chất lượng cao (tách hình/tiếng) có thể chỉ tải được bản thấp hơn.'}</div>
+      <div class="row">${quality}${res.ytdlp ? '<button class="btn" id="yt-go">Tải video trang này</button>' : ''}</div>
+      <div class="panel-note" style="padding:6px 2px 0">${res.ytdlp ? 'Hỗ trợ YouTube, Facebook, TikTok, Instagram, X… ' : ''}Luồng HLS/DASH (JW Player…) được ghép thành MP4. ${res.hasYtdlp && res.hasFfmpeg ? '' : 'Lần đầu sẽ tự tải công cụ yt-dlp / ffmpeg.'}</div>
     </div>`
   }
+  const fmtSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n > 1024 ? `${Math.round(n / 1024)} KB` : '')
   for (const [i, m] of items.entries()) {
     let name = m.url
     try {
       const u = new URL(m.url)
       name = decodeURIComponent(u.pathname.split('/').pop() || u.hostname)
     } catch {}
-    const det = [m.width && m.height ? `${m.width}×${m.height}` : '', m.duration ? `${Math.floor(m.duration / 60)}:${String(m.duration % 60).padStart(2, '0')}` : '', /\.m3u8|\.mpd/i.test(m.url) ? 'luồng HLS/DASH' : ''].filter(Boolean).join(' · ')
-    const isStream = /\.m3u8|\.mpd/i.test(m.url)
+    if (m.title && m.stream) name = m.title
+    const det = [
+      m.player || '',
+      m.label || '',
+      m.stream === 'hls' ? 'Luồng HLS (m3u8)' : m.stream === 'dash' ? 'Luồng DASH (mpd)' : '',
+      m.width && m.height ? `${m.width}×${m.height}` : '',
+      m.duration ? `${Math.floor(m.duration / 60)}:${String(m.duration % 60).padStart(2, '0')}` : '',
+      fmtSize(m.size),
+    ].filter(Boolean).join(' · ')
     html += `<div class="media-item"><span class="ico">${m.type === 'audio' ? I.audio : I.video}</span>
-      <div class="meta"><div class="name" title="${esc(m.url)}">${esc(name)}</div><div class="det">${esc(det || m.type)}</div></div>
-      <button class="btn ghost" data-i="${i}" ${isStream ? 'data-stream="1"' : ''}>Tải</button></div>`
+      <div class="meta"><div class="name" title="${esc(m.url)}">${esc(name)}</div><div class="det">${esc(det || (m.type === 'audio' ? 'Âm thanh' : 'Video'))}</div></div>
+      <button class="btn ghost" data-i="${i}">Tải</button></div>`
   }
-  if (!items.length && !res.ytdlp) html += '<div class="panel-note">Không tìm thấy video hoặc âm thanh trên trang này. Hãy bật phát video rồi thử lại.</div>'
+  if (!items.length && !res.ytdlp) html += '<div class="panel-note">Không tìm thấy video hoặc âm thanh trên trang này. Hãy bấm phát video vài giây rồi mở lại bảng này.</div>'
+  else if (!items.length) html += '<div class="panel-note">Chưa bắt được link video. Nếu tải bằng nút trên không được, hãy bấm phát video vài giây rồi mở lại bảng này.</div>'
   html += '</div>'
   mediaPanel.innerHTML = html
+  const chosenQuality = () => mediaPanel.querySelector('#yt-quality')?.value || 'best'
   mediaPanel.querySelector('#yt-go')?.addEventListener('click', () => {
-    ui.send('download-media', { quality: mediaPanel.querySelector('#yt-quality').value })
+    ui.send('download-media', { quality: chosenQuality() })
     hideOverlay()
   })
   mediaPanel.querySelectorAll('.media-item .btn').forEach((b) =>
     b.addEventListener('click', () => {
-      // Luồng HLS/DASH cần yt-dlp ghép lại.
-      if (b.dataset.stream) ui.send('download-media', { quality: 'best' })
-      else ui.send('download-media', { url: items[Number(b.dataset.i)].url })
+      ui.send('download-media', { index: Number(b.dataset.i), quality: chosenQuality() })
       hideOverlay()
     })
   )

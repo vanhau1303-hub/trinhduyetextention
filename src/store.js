@@ -50,6 +50,18 @@ const DEFAULT_SETTINGS = {
   unpackedExtensions: [],
   translateTarget: 'vi',
   newtabBackground: '',
+  // DNS-over-HTTPS để tránh bị nhà mạng chặn web qua DNS: off | cloudflare | google | quad9 | adguard | custom
+  secureDns: 'cloudflare',
+  secureDnsCustom: '',
+}
+
+const DNS_PROVIDERS = {
+  off: { name: 'Tắt (dùng DNS của nhà mạng)', url: '' },
+  cloudflare: { name: 'Cloudflare 1.1.1.1', url: 'https://cloudflare-dns.com/dns-query' },
+  google: { name: 'Google 8.8.8.8', url: 'https://dns.google/dns-query' },
+  quad9: { name: 'Quad9 9.9.9.9', url: 'https://dns.quad9.net/dns-query' },
+  adguard: { name: 'AdGuard (chặn thêm quảng cáo)', url: 'https://dns.adguard-dns.com/dns-query' },
+  custom: { name: 'Tuỳ chỉnh…', url: '' },
 }
 
 const SEARCH_ENGINES = {
@@ -80,4 +92,4 @@ function flushAll() {
   for (const s of Object.values(stores)) s.flush()
 }
 
-module.exports = { getStores, flushAll, SEARCH_ENGINES, DEFAULT_SETTINGS }
+module.exports = { getStores, flushAll, SEARCH_ENGINES, DEFAULT_SETTINGS, DNS_PROVIDERS }

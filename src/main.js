@@ -13,7 +13,7 @@ app.setAppUserModelId('com.metal.browser')
 // Dành cho kiểm thử: dùng thư mục dữ liệu riêng để không đụng vào hồ sơ thật.
 if (process.env.METAL_USER_DATA) app.setPath('userData', process.env.METAL_USER_DATA)
 
-const { getStores, flushAll, SEARCH_ENGINES } = require('./store')
+const { getStores, flushAll, SEARCH_ENGINES, DNS_PROVIDERS } = require('./store')
 const stores = getStores()
 const settings = stores.settings
 
@@ -388,6 +388,7 @@ const ctx = {
       nativeTheme.themeSource = value
     }
     if (key === 'adblock') this.applyAdblock()
+    if (key === 'secureDns' || key === 'secureDnsCustom') this.applyDns()
     this.broadcastState()
     this.broadcastPages('settings', settings.data)
   },
@@ -439,7 +440,7 @@ const ctx = {
         add({ label: isVideo ? 'Mở video trong tab mới' : 'Mở âm thanh trong tab mới', click: () => win.createTab({ url: params.srcURL, afterTab: tab }) })
         add({ label: 'Sao chép địa chỉ', click: () => clipboard.writeText(params.srcURL) })
       } else {
-        add({ label: isVideo ? '⬇  Tải video trên trang này (yt-dlp)' : '⬇  Tải âm thanh trên trang này (yt-dlp)', click: () => this.media.downloadWithYtdlp(wc.getURL(), wc.getTitle(), isVideo ? 'best' : 'audio').catch(showError) })
+        add({ label: isVideo ? '⬇  Tải video trên trang này (yt-dlp)' : '⬇  Tải âm thanh trên trang này (yt-dlp)', click: () => this.downloadBestMedia(tab, isVideo ? 'best' : 'audio') })
       }
       if (isVideo) {
         add({
@@ -504,6 +505,16 @@ const ctx = {
     menu.popup({ window: win.win })
   },
 
+  // Tải video của trang: ưu tiên luồng HLS/DASH bắt được (JW Player...), không có thì để yt-dlp tự tìm.
+  async downloadBestMedia(tab, quality) {
+    const res = await this.media.scan(tab.wc)
+    const stream = res.items.find((m) => m.stream)
+    const task = stream && !this.media.isYtdlpSite(tab.wc.getURL())
+      ? this.media.downloadItem(tab.wc, stream, quality)
+      : this.media.downloadWithYtdlp(tab.wc.getURL(), tab.wc.getTitle(), quality)
+    return task.catch(showError)
+  },
+
   // ---- Dịch nhanh đoạn chọn (giống Cốc Cốc): hiện bong bóng dịch ngay trên trang ----
   async quickTranslate(tab, text, params) {
     const target = settings.data.translateTarget || 'vi'
@@ -554,6 +565,33 @@ const ctx = {
     const target = settings.data.translateTarget || 'vi'
     const url = tab.wc.getURL()
     tab.load(`https://translate.google.com/translate?sl=auto&tl=${target}&u=${encodeURIComponent(url)}`)
+  },
+
+  // ---- DNS bảo mật (DNS-over-HTTPS) ----
+  // Truy vấn tên miền qua HTTPS tới Cloudflare/Google… thay vì DNS của nhà mạng, nên các trang bị
+  // chặn bằng DNS vẫn vào được. Chế độ "secure": không bao giờ quay về DNS nhà mạng.
+  dnsServer() {
+    const key = settings.data.secureDns
+    if (key === 'custom') {
+      const custom = (settings.data.secureDnsCustom || '').trim()
+      return custom.startsWith('https://') ? custom : ''
+    }
+    return DNS_PROVIDERS[key]?.url || ''
+  },
+
+  applyDns() {
+    const server = this.dnsServer()
+    try {
+      app.configureHostResolver(
+        server
+          ? { enableBuiltInResolver: true, secureDnsMode: 'secure', secureDnsServers: [server] }
+          : { enableBuiltInResolver: true, secureDnsMode: 'automatic', secureDnsServers: [] }
+      )
+    } catch (err) {
+      console.error('Không cấu hình được DNS:', err)
+    }
+    // Xoá cache DNS cũ để áp dụng ngay.
+    this.session?.clearHostResolverCache().catch(() => {})
   },
 
   // ---- Chặn quảng cáo ----
@@ -872,7 +910,9 @@ ipcMain.on('ui:action', (event, type, p = {}) => {
     case 'shortcut': return ctx.handleShortcut(win, p, true)
     case 'download-media': {
       if (!tab) return
-      if (p.url) return wc.downloadURL(p.url)
+      // Mục trong bảng tải video (theo lần quét gần nhất của cửa sổ này).
+      const item = typeof p.index === 'number' ? win.lastMediaScan?.items?.[p.index] : null
+      if (item) return ctx.media.downloadItem(wc, item, p.quality || 'best').catch(showError)
       return ctx.media.downloadWithYtdlp(wc.getURL(), wc.getTitle(), p.quality || 'best').catch(showError)
     }
     case 'open-downloads': return ctx.openInternal('downloads')
@@ -903,6 +943,7 @@ ipcMain.handle('ui:invoke', async (event, type, p = {}) => {
       const tab = win.activeTab
       if (!tab) return { items: [] }
       const res = await ctx.media.scan(tab.wc)
+      win.lastMediaScan = res
       return { ...res, hasYtdlp: ctx.media.hasYtdlp(), hasFfmpeg: !!(await ctx.media.findFfmpeg()) }
     }
     case 'search-engine': return SEARCH_ENGINES[settings.data.searchEngine] || SEARCH_ENGINES.google
@@ -915,6 +956,8 @@ function showAppMenu(win, { x, y }) {
   const wc = tab?.wc
   const zoom = wc ? Math.round(wc.getZoomFactor() * 100) : 100
   Menu.buildFromTemplate([
+    { label: `Metal Browser — phiên bản ${app.getVersion()}`, click: () => ctx.openInternal('about') },
+    { type: 'separator' },
     { label: 'Tab mới', accelerator: 'Ctrl+T', click: () => win.createTab({ url: ctx.newTabUrl() }) },
     { label: 'Cửa sổ mới', accelerator: 'Ctrl+N', click: () => ctx.createWindow() },
     { type: 'separator' },
@@ -941,6 +984,15 @@ function showAppMenu(win, { x, y }) {
     {
       label: 'Công cụ khác',
       submenu: [
+        {
+          label: 'DNS bảo mật (chống chặn web)',
+          submenu: Object.entries(DNS_PROVIDERS).map(([key, p]) => ({
+            label: p.name,
+            type: 'radio',
+            checked: settings.data.secureDns === key,
+            click: () => (key === 'custom' ? ctx.openInternal('settings') : ctx.setSetting('secureDns', key)),
+          })),
+        },
         { label: 'Chặn quảng cáo', type: 'checkbox', checked: settings.data.adblock, click: () => ctx.setSetting('adblock', !settings.data.adblock) },
         { label: 'Hiện thanh dấu trang', type: 'checkbox', accelerator: 'Ctrl+Shift+B', checked: settings.data.showBookmarksBar, click: () => ctx.setSetting('showBookmarksBar', !settings.data.showBookmarksBar) },
         { type: 'separator' },
@@ -979,7 +1031,7 @@ ipcMain.handle('page:invoke', async (event, name, ...args) => {
   const win = [...ctx.windows].find((w) => w.tabs.some((t) => t.wc === event.sender)) || ctx.activeWindow()
   const [a, b] = args
   switch (name) {
-    case 'getSettings': return { ...settings.data, engines: SEARCH_ENGINES, version: app.getVersion(), versions: { chrome: process.versions.chrome, electron: process.versions.electron } }
+    case 'getSettings': return { ...settings.data, engines: SEARCH_ENGINES, dnsProviders: DNS_PROVIDERS, version: app.getVersion(), versions: { chrome: process.versions.chrome, electron: process.versions.electron } }
     case 'setSetting': return ctx.setSetting(a, b)
     case 'getTopSites': return history.topSites(a || 12)
     case 'getHistory': return history.search(a, b || 300)
@@ -1122,10 +1174,16 @@ app.whenReady().then(async () => {
   })
 
   registerMetalProtocol(ses)
+  ctx.applyDns()
   ses.registerPreloadScript({ id: 'metal-page-preload', type: 'frame', filePath: PAGE_PRELOAD })
 
   ctx.downloads = new DownloadManager()
   ctx.media = new MediaTools(ctx.downloads, ses)
+  ctx.media.attachSniffer()
+  // Bắt được link media mới từ mạng: cập nhật nút "Tải video" của tab đó.
+  ctx.media.on('found', (wcId) => {
+    for (const w of ctx.windows) w.tabs.find((t) => t.id === wcId)?.scheduleMediaScan()
+  })
   ses.on('will-download', (_e, item) => ctx.downloads.handleWillDownload(item))
   let dlTimer = null
   ctx.downloads.on('changed', () => {
