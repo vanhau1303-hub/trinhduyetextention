@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data: blob: crx: metal: chrome-extension:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Metal Browser</title>
+  <link rel="stylesheet" href="ui.css" />
+</head>
+<body>
+  <div id="chrome">
+    <div id="tabstrip">
+      <div id="tabs"></div>
+      <button id="new-tab" class="icon-btn" title="Tab mới (Ctrl+T)"></button>
+      <div class="drag-space"></div>
+    </div>
+
+    <div id="toolbar">
+      <button id="btn-back" class="icon-btn" title="Quay lại (Alt+←)"></button>
+      <button id="btn-forward" class="icon-btn" title="Tiến tới (Alt+→)"></button>
+      <button id="btn-reload" class="icon-btn" title="Tải lại (F5)"></button>
+      <button id="btn-home" class="icon-btn" title="Trang chủ"></button>
+
+      <div id="omnibox">
+        <span id="site-icon" title=""></span>
+        <input id="address" type="text" spellcheck="false" autocomplete="off" placeholder="Tìm kiếm hoặc nhập địa chỉ web" />
+        <button id="btn-zoom" class="pill hidden" title="Đặt lại thu phóng"></button>
+        <button id="btn-media" class="omni-btn hidden" title="Tải video / nhạc trên trang này"></button>
+        <button id="btn-translate" class="omni-btn hidden" title="Dịch trang sang Tiếng Việt"></button>
+        <button id="btn-star" class="omni-btn" title="Đánh dấu trang này (Ctrl+D)"></button>
+      </div>
+
+      <browser-action-list id="actions" alignment="bottom left"></browser-action-list>
+      <button id="btn-extensions" class="icon-btn" title="Tiện ích mở rộng"></button>
+      <button id="btn-adblock" class="icon-btn" title="Chặn quảng cáo"></button>
+      <button id="btn-downloads" class="icon-btn hidden" title="Tải xuống (Ctrl+J)"></button>
+      <button id="btn-menu" class="icon-btn" title="Menu"></button>
+    </div>
+
+    <div id="bookmarks-bar" class="hidden"></div>
+
+    <div id="findbar" class="hidden">
+      <input id="find-input" type="text" spellcheck="false" placeholder="Tìm trong trang" />
+      <span id="find-count"></span>
+      <button id="find-prev" class="icon-btn" title="Kết quả trước (Shift+Enter)"></button>
+      <button id="find-next" class="icon-btn" title="Kết quả tiếp (Enter)"></button>
+      <button id="find-close" class="icon-btn" title="Đóng (Esc)"></button>
+    </div>
+  </div>
+
+  <!-- Lớp phủ dùng cho gợi ý thanh địa chỉ và các bảng thả xuống -->
+  <div id="backdrop" class="hidden"></div>
+  <div id="suggestions" class="popover hidden"></div>
+  <div id="media-panel" class="popover hidden"></div>
+  <div id="downloads-panel" class="popover hidden"></div>
+
+  <script src="icons.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>

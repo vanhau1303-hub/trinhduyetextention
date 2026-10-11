@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Lịch sử</title>
+  <link rel="icon" href="metal://favicon/" />
+  <link rel="stylesheet" href="pages.css" />
+  <style>
+    .day { padding: 12px 18px 6px; font-weight: 600; font-size: 13px; color: var(--dim); border-top: 1px solid var(--border); }
+    .day:first-child { border-top: 0; }
+    .item { display: flex; align-items: center; gap: 12px; padding: 7px 12px 7px 18px; }
+    .item:hover { background: var(--hover); }
+    .item .time { color: var(--dim); font-size: 12px; width: 44px; flex: none; }
+    .item a { color: var(--text); flex: 0 1 auto; min-width: 0; }
+    .item .host { color: var(--dim); font-size: 12px; flex: 1; min-width: 0; }
+    .head { display: flex; gap: 8px; align-items: center; }
+    .head .search { margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="side"></aside>
+    <main class="main">
+      <h1>Lịch sử</h1>
+      <div class="head" style="margin-bottom:16px">
+        <input type="search" class="search" id="q" placeholder="Tìm trong lịch sử" />
+        <button class="btn danger" id="clear">Xoá toàn bộ</button>
+      </div>
+      <div class="card" id="list"></div>
+    </main>
+  </div>
+  <script src="common.js"></script>
+  <script>
+    renderShell('history')
+    let items = []
+    async function load() {
+      items = await api('getHistory', $('#q').value, 1000)
+      if (!items.length) {
+        $('#list').innerHTML = '<div class="empty">Không có mục nào.</div>'
+        return
+      }
+      const today = new Date().toDateString()
+      const yesterday = new Date(Date.now() - 864e5).toDateString()
+      let html = ''
+      let lastDay = ''
+      for (const h of items) {
+        const d = new Date(h.time)
+        const ds = d.toDateString()
+        if (ds !== lastDay) {
+          lastDay = ds
+          const label = ds === today ? 'Hôm nay' : ds === yesterday ? 'Hôm qua' : d.toLocaleDateString('vi-VN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+          html += `<div class="day">${esc(label)}</div>`
+        }
+        let host = ''
+        try { host = new URL(h.url).hostname } catch {}
+        html += `<div class="item" data-id="${esc(h.id)}"><span class="time">${d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+          <img class="fav" src="${esc(faviconFor(h.url, h.favicon))}" alt="">
+          <a class="ellipsis" href="${esc(h.url)}" title="${esc(h.url)}">${esc(h.title || h.url)}</a>
+          <span class="host ellipsis">${esc(host)}</span>
+          <button class="icon-btn" data-del title="Xoá khỏi lịch sử">✕</button></div>`
+      }
+      $('#list').innerHTML = html
+      $$('#list img').forEach((img) => (img.onerror = () => (img.style.visibility = 'hidden')))
+    }
+    let t
+    $('#q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 200) })
+    $('#list').addEventListener('click', async (e) => {
+      const del = e.target.closest('[data-del]')
+      if (!del) return
+      await api('removeHistory', [del.closest('.item').dataset.id])
+      load()
+    })
+    $('#clear').addEventListener('click', async () => {
+      if (!confirm('Xoá toàn bộ lịch sử duyệt web?')) return
+      await api('clearHistory')
+      load()
+    })
+    load()
+  </script>
+</body>
+</html>

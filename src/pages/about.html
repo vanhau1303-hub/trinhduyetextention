@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Giới thiệu Metal Browser</title>
+  <link rel="icon" href="metal://favicon/" />
+  <link rel="stylesheet" href="pages.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="side"></aside>
+    <main class="main">
+      <h1>Giới thiệu</h1>
+      <div class="card">
+        <div class="row">
+          <img src="metal://favicon/" alt="" style="width:56px;height:56px;border-radius:12px" />
+          <div class="grow">
+            <div class="label" style="font-size:18px">Metal Browser</div>
+            <div class="desc" id="ver"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="grow">
+            <div class="label">Tính năng</div>
+            <div class="desc">
+              Chạy extension Chrome (Manifest V2 & V3) · Cài trực tiếp từ Chrome Web Store · Nhập extension từ Cốc Cốc/Chrome/Edge ·
+              Tải video YouTube/Facebook/TikTok · Dịch nhanh đoạn chữ & dịch trang · Chặn quảng cáo · Chế độ tối · Kiểm tra chính tả tiếng Việt ·
+              Khôi phục phiên làm việc · Ghim tab · Tìm trong trang · Thanh dấu trang.
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="grow">
+            <div class="label">Phím tắt</div>
+            <div class="desc">
+              Ctrl+T tab mới · Ctrl+W đóng tab · Ctrl+Shift+T mở lại tab · Ctrl+Tab chuyển tab · Ctrl+L thanh địa chỉ · Ctrl+F tìm ·
+              Ctrl+D đánh dấu · Ctrl+H lịch sử · Ctrl+J tải xuống · Ctrl +/−/0 thu phóng · F11 toàn màn hình · F12 công cụ nhà phát triển
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="grow">
+            <div class="label">Mã nguồn mở</div>
+            <div class="desc">Xây dựng trên Electron/Chromium, electron-chrome-extensions (GPL-3.0), electron-chrome-web-store, Ghostery adblocker và yt-dlp.</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="common.js"></script>
+  <script>
+    renderShell('about')
+    api('getSettings').then((s) => {
+      document.getElementById('ver').textContent = `Phiên bản ${s.version} · Chromium ${s.versions.chrome} · Electron ${s.versions.electron}`
+    })
+  </script>
+</body>
+</html>

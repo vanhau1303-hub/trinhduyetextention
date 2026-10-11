@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Dấu trang</title>
+  <link rel="icon" href="metal://favicon/" />
+  <link rel="stylesheet" href="pages.css" />
+  <style>
+    .bm { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 18px; border-top: 1px solid var(--border); }
+    .bm:first-child { border-top: 0; }
+    .bm:hover { background: var(--hover); }
+    .bm .grow { flex: 1; min-width: 0; }
+    .bm a { color: var(--text); }
+    .bm .url { color: var(--dim); font-size: 12px; }
+    .bm.dragging { opacity: 0.4; }
+    .bm.over { box-shadow: inset 0 2px 0 var(--accent); }
+    .add { display: flex; gap: 8px; margin-bottom: 16px; }
+    .add input { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="side"></aside>
+    <main class="main">
+      <h1>Dấu trang</h1>
+      <form class="add" id="add">
+        <input type="text" id="title" placeholder="Tên" style="flex:0 0 220px" />
+        <input type="text" id="url" placeholder="Địa chỉ (https://…)" />
+        <button class="btn primary" type="submit">Thêm</button>
+      </form>
+      <input type="search" class="search" id="q" placeholder="Tìm dấu trang" />
+      <div class="card" id="list"></div>
+      <p class="muted">Kéo thả để sắp xếp. Dấu trang hiện trên thanh dấu trang (Ctrl+Shift+B để ẩn/hiện).</p>
+    </main>
+  </div>
+  <script src="common.js"></script>
+  <script>
+    renderShell('bookmarks')
+    let items = []
+    async function load() {
+      items = await api('getBookmarks')
+      const q = $('#q').value.toLowerCase()
+      const list = items.filter((b) => !q || b.title.toLowerCase().includes(q) || b.url.toLowerCase().includes(q))
+      if (!list.length) {
+        $('#list').innerHTML = '<div class="empty">Chưa có dấu trang. Bấm ☆ trên thanh địa chỉ để thêm.</div>'
+        return
+      }
+      $('#list').innerHTML = list.map((b) => `<div class="bm" draggable="${q ? 'false' : 'true'}" data-id="${esc(b.id)}">
+        <img class="fav" src="${esc(faviconFor(b.url, b.favicon))}" alt="">
+        <div class="grow"><div class="ellipsis"><a href="${esc(b.url)}">${esc(b.title)}</a></div><div class="url ellipsis">${esc(b.url)}</div></div>
+        <button class="icon-btn" data-a="edit" title="Đổi tên">✎</button>
+        <button class="icon-btn" data-a="del" title="Xoá">✕</button></div>`).join('')
+      $$('#list img').forEach((img) => (img.onerror = () => (img.style.visibility = 'hidden')))
+    }
+    $('#list').addEventListener('click', async (e) => {
+      const a = e.target.closest('[data-a]')
+      if (!a) return
+      const id = a.closest('.bm').dataset.id
+      const b = items.find((x) => x.id === id)
+      if (a.dataset.a === 'del') await api('removeBookmark', id)
+      if (a.dataset.a === 'edit') {
+        const title = prompt('Tên dấu trang', b.title)
+        if (title == null) return
+        await api('updateBookmark', id, { title: title.trim() || b.url })
+      }
+      load()
+    })
+    let dragId = null
+    $('#list').addEventListener('dragstart', (e) => { const el = e.target.closest('.bm'); dragId = el?.dataset.id; el?.classList.add('dragging') })
+    $('#list').addEventListener('dragend', () => { dragId = null; $$('.bm').forEach((x) => x.classList.remove('dragging', 'over')) })
+    $('#list').addEventListener('dragover', (e) => {
+      const el = e.target.closest('.bm')
+      if (!el || !dragId) return
+      e.preventDefault()
+      $$('.bm.over').forEach((x) => x.classList.remove('over'))
+      el.classList.add('over')
+    })
+    $('#list').addEventListener('drop', async (e) => {
+      const el = e.target.closest('.bm')
+      if (!el || !dragId) return
+      e.preventDefault()
+      const to = items.findIndex((b) => b.id === el.dataset.id)
+      const from = items.findIndex((b) => b.id === dragId)
+      await api('moveBookmark', dragId, from < to ? to - 1 : to)
+      load()
+    })
+    $('#add').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      let url = $('#url').value.trim()
+      if (!url) return
+      if (!/^[a-z-]+:/i.test(url)) url = `https://${url}`
+      await api('addBookmark', url, $('#title').value.trim() || url)
+      $('#url').value = ''
+      $('#title').value = ''
+      load()
+    })
+    $('#q').addEventListener('input', load)
+    load()
+  </script>
+</body>
+</html>

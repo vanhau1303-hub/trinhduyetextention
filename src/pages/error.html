@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Không thể truy cập trang web</title>
+  <link rel="stylesheet" href="pages.css" />
+  <style>
+    body { display: grid; place-items: center; min-height: 100vh; }
+    .box { max-width: 560px; padding: 24px; }
+    .big { font-size: 56px; line-height: 1; margin-bottom: 18px; }
+    h1 { margin-bottom: 8px; }
+    .code { font-family: Consolas, monospace; color: var(--dim); font-size: 12.5px; margin: 16px 0 24px; }
+    ul { color: var(--dim); padding-left: 18px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="big">🔌</div>
+    <h1 id="title">Không thể truy cập trang web này</h1>
+    <p id="host" class="muted"></p>
+    <ul id="tips">
+      <li>Kiểm tra kết nối mạng / Wi-Fi</li>
+      <li>Kiểm tra lại địa chỉ đã nhập</li>
+      <li>Thử tắt VPN, proxy hoặc tường lửa</li>
+    </ul>
+    <div class="code" id="code"></div>
+    <button class="btn primary" id="retry">Thử lại</button>
+  </div>
+  <script>
+    const p = new URLSearchParams(location.search)
+    const url = p.get('u') || ''
+    const code = Number(p.get('code'))
+    const desc = p.get('desc') || ''
+    let host = url
+    try { host = new URL(url).hostname } catch {}
+    document.title = host
+    const MSG = {
+      '-105': `Không tìm thấy địa chỉ IP của máy chủ ${host}.`,
+      '-106': 'Bạn đang không kết nối Internet.',
+      '-102': `${host} đã từ chối kết nối.`,
+      '-118': `${host} phản hồi quá lâu.`,
+      '-7': `${host} phản hồi quá lâu.`,
+      '-200': 'Kết nối của bạn không phải là kết nối riêng tư (chứng chỉ không hợp lệ).',
+      '-201': 'Chứng chỉ của trang không hợp lệ (sai ngày giờ?).',
+      '-202': 'Chứng chỉ của trang không được tin cậy.',
+      '-101': 'Kết nối đã bị đặt lại.',
+      '-100': 'Kết nối đã bị đóng.',
+      '-137': 'Lỗi phân giải tên miền.',
+      '-20': 'Trang này đã bị chặn.',
+    }
+    document.getElementById('host').textContent = MSG[String(code)] || `Không mở được ${host}.`
+    if (code === -106) document.getElementById('title').textContent = 'Không có kết nối Internet'
+    document.getElementById('code').textContent = desc
+    document.getElementById('retry').addEventListener('click', () => (location.href = url))
+  </script>
+</body>
+</html>

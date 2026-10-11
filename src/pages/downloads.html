@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Tải xuống</title>
+  <link rel="icon" href="metal://favicon/" />
+  <link rel="stylesheet" href="pages.css" />
+  <style>
+    .dl { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-top: 1px solid var(--border); }
+    .dl:first-child { border-top: 0; }
+    .dl .ic { width: 36px; height: 36px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .dl .grow { flex: 1; min-width: 0; }
+    .dl .name { font-weight: 500; }
+    .dl .name a { color: var(--text); }
+    .dl .src { color: var(--dim); font-size: 12px; }
+    .dl .bar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 6px; overflow: hidden; }
+    .dl .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
+    .dl.failed .name { color: var(--dim); text-decoration: line-through; }
+    .dl .err { color: var(--danger); font-size: 12px; }
+    .actions { display: flex; gap: 6px; flex: none; }
+    .head { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+    .head .search { margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="side"></aside>
+    <main class="main">
+      <h1>Tải xuống</h1>
+      <div class="head">
+        <input type="search" class="search" id="q" placeholder="Tìm file đã tải" />
+        <button class="btn" id="folder">Mở thư mục</button>
+        <button class="btn danger" id="clear">Xoá danh sách</button>
+      </div>
+      <div class="card" id="list"></div>
+    </main>
+  </div>
+  <script src="common.js"></script>
+  <script>
+    renderShell('downloads')
+    let items = []
+    function render() {
+      const q = $('#q').value.toLowerCase()
+      const list = items.filter((d) => !q || (d.filename || '').toLowerCase().includes(q) || (d.url || '').toLowerCase().includes(q))
+      if (!list.length) {
+        $('#list').innerHTML = '<div class="empty">Chưa có tệp nào được tải xuống.</div>'
+        return
+      }
+      $('#list').innerHTML = list.map((d) => {
+        const ext = ((d.filename || '').match(/\.([a-z0-9]{1,4})$/i) || [])[1] || (d.kind === 'ytdlp' ? 'video' : 'file')
+        const failed = d.state === 'cancelled' || d.state === 'interrupted'
+        let status = ''
+        if (d.state === 'progressing') {
+          const size = d.total ? `${formatBytes(d.received)} / ${formatBytes(d.total)}` : d.sizeText || (d.received ? formatBytes(d.received) : '')
+          status = `${Math.round(d.percent || 0)}% ${size ? '· ' + size : ''} ${d.speed ? '· ' + d.speed : ''} ${d.paused ? '· Tạm dừng' : ''}`
+        } else if (d.state === 'completed') status = d.total || d.received ? formatBytes(d.total || d.received) : 'Hoàn tất'
+        else if (d.state === 'cancelled') status = 'Đã huỷ'
+        else status = 'Bị gián đoạn'
+        const actions = d.state === 'progressing'
+          ? `${d.kind === 'file' ? `<button class="btn" data-a="pause">${d.paused ? 'Tiếp tục' : 'Tạm dừng'}</button>` : ''}<button class="btn danger" data-a="cancel">Huỷ</button>`
+          : d.state === 'completed' ? `<button class="btn" data-a="show">Hiện trong thư mục</button>` : ''
+        return `<div class="dl ${failed ? 'failed' : ''}" data-id="${esc(d.id)}">
+          <div class="ic">${esc(ext.slice(0, 4))}</div>
+          <div class="grow">
+            <div class="name ellipsis">${d.state === 'completed' ? `<a href="#" data-a="open">${esc(d.filename)}</a>` : esc(d.filename)}</div>
+            <div class="src ellipsis" title="${esc(d.url)}">${esc(status)} · ${esc(d.url)}</div>
+            ${d.error ? `<div class="err ellipsis" title="${esc(d.error)}">${esc(d.error)}</div>` : ''}
+            ${d.state === 'progressing' ? `<div class="bar"><i style="width:${d.percent || 0}%"></i></div>` : ''}
+          </div>
+          <div class="actions">${actions}<button class="icon-btn" data-a="remove" title="Xoá khỏi danh sách">✕</button></div>
+        </div>`
+      }).join('')
+    }
+    const ACTIONS = { open: 'openDownload', show: 'showDownload', cancel: 'cancelDownload', pause: 'pauseDownload', remove: 'removeDownload' }
+    $('#list').addEventListener('click', (e) => {
+      const a = e.target.closest('[data-a]')
+      if (!a) return
+      e.preventDefault()
+      api(ACTIONS[a.dataset.a], a.closest('.dl').dataset.id)
+    })
+    $('#q').addEventListener('input', render)
+    $('#folder').addEventListener('click', () => api('openDownloadsFolder'))
+    $('#clear').addEventListener('click', () => api('clearDownloads'))
+    window.metal.on('downloads', (list) => { items = list; render() })
+    api('getDownloads').then((list) => { items = list; render() })
+  </script>
+</body>
+</html>

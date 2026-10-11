@@ -1,0 +1,82 @@
+{
+  "name": "metal-browser",
+  "version": "1.0.0",
+  "description": "Trình duyệt chạy được extension Chrome, kèm tính năng kiểu Cốc Cốc (tải video, dịch nhanh, chặn quảng cáo)",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "icon": "electron scripts/make-icon.js",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win dir"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vanhau1303-hub/trinhduyetextention.git"
+  },
+  "author": "vanhau1303-hub",
+  "license": "GPL-3.0",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/vanhau1303-hub/trinhduyetextention/issues"
+  },
+  "homepage": "https://github.com/vanhau1303-hub/trinhduyetextention#readme",
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "@ghostery/adblocker-electron": "^2.20.1",
+    "adm-zip": "^0.6.1",
+    "electron-chrome-extensions": "^4.9.0",
+    "electron-chrome-web-store": "^0.13.0"
+  },
+  "allowScripts": {
+    "electron@44.7.0": true
+  },
+  "productName": "Metal Browser",
+  "build": {
+    "appId": "com.metal.browser",
+    "productName": "Metal Browser",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Metal Browser"
+    },
+    "protocols": [
+      {
+        "name": "Web",
+        "schemes": [
+          "http",
+          "https"
+        ]
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "htm",
+          "html"
+        ],
+        "name": "HTML",
+        "role": "Viewer"
+      }
+    ]
+  }
+}

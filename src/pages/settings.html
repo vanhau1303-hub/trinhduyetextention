@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Cài đặt</title>
+  <link rel="icon" href="metal://favicon/" />
+  <link rel="stylesheet" href="pages.css" />
+  <style>
+    .checks { display: flex; flex-wrap: wrap; gap: 16px; }
+    .checks label { display: flex; gap: 6px; align-items: center; }
+    .path { font-family: Consolas, monospace; font-size: 12.5px; color: var(--dim); word-break: break-all; }
+    .ok { color: var(--green); }
+    .warn { color: #d97706; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="side"></aside>
+    <main class="main">
+      <h1>Cài đặt</h1>
+
+      <h2>Khởi động & trang chủ</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Mở lại các tab từ lần trước</div><div class="desc">Khi mở trình duyệt, khôi phục các tab và cửa sổ đang mở lúc tắt.</div></div>
+          <label class="switch"><input type="checkbox" data-key="restoreSession"><span></span></label>
+        </div>
+        <div class="row">
+          <div class="grow"><div class="label">Trang chủ</div><div class="desc">Để trống để dùng trang Tab mới.</div></div>
+          <input type="text" id="homepage" style="width:300px" placeholder="metal://newtab" />
+        </div>
+      </div>
+
+      <h2>Tìm kiếm</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Công cụ tìm kiếm trên thanh địa chỉ</div></div>
+          <select id="searchEngine"></select>
+        </div>
+      </div>
+
+      <h2>Giao diện</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Chủ đề</div></div>
+          <select id="uiTheme">
+            <option value="system">Theo Windows</option>
+            <option value="light">Sáng</option>
+            <option value="dark">Tối</option>
+          </select>
+        </div>
+        <div class="row">
+          <div class="grow"><div class="label">Hiện thanh dấu trang</div><div class="desc">Ctrl+Shift+B</div></div>
+          <label class="switch"><input type="checkbox" data-key="showBookmarksBar"><span></span></label>
+        </div>
+        <div class="row">
+          <div class="grow"><div class="label">Ép mọi trang web sang chế độ tối</div><div class="desc">Giống chế độ tối của Cốc Cốc. Cần khởi động lại trình duyệt.</div></div>
+          <label class="switch"><input type="checkbox" data-key="forceDarkPages" data-restart="1"><span></span></label>
+        </div>
+      </div>
+
+      <h2>Chặn quảng cáo</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Chặn quảng cáo và trình theo dõi</div><div class="desc">Dùng bộ lọc EasyList + EasyPrivacy. Nếu một extension cần chặn/sửa yêu cầu mạng (webRequest) không hoạt động, hãy tắt mục này.</div></div>
+          <label class="switch"><input type="checkbox" data-key="adblock"><span></span></label>
+        </div>
+      </div>
+
+      <h2>Tải xuống</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Thư mục lưu</div><div class="path" id="download-dir"></div></div>
+          <button class="btn" id="choose-dir">Thay đổi</button>
+        </div>
+        <div class="row">
+          <div class="grow"><div class="label">Hỏi nơi lưu trước mỗi lần tải</div></div>
+          <label class="switch"><input type="checkbox" data-key="askWhereToSave"><span></span></label>
+        </div>
+      </div>
+
+      <h2>Tải video (như Cốc Cốc Savior)</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Công cụ yt-dlp</div><div class="desc" id="ytdlp-status">Đang kiểm tra…</div></div>
+          <button class="btn" id="ytdlp-btn">Cài đặt</button>
+        </div>
+        <div class="row">
+          <div class="grow"><div class="label">ffmpeg</div><div class="desc" id="ffmpeg-status"></div></div>
+          <button class="btn" id="ffmpeg-btn">Cài đặt ngay</button>
+        </div>
+      </div>
+
+      <h2>Dịch</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Dịch sang ngôn ngữ</div><div class="desc">Dùng cho "Dịch trang" và dịch nhanh đoạn chữ đã chọn (chuột phải).</div></div>
+          <select id="translateTarget">
+            <option value="vi">Tiếng Việt</option>
+            <option value="en">English</option>
+            <option value="zh-CN">中文 (简体)</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="fr">Français</option>
+          </select>
+        </div>
+      </div>
+
+      <h2>Quyền riêng tư</h2>
+      <div class="card">
+        <div class="row" style="flex-wrap:wrap">
+          <div class="grow"><div class="label">Xoá dữ liệu duyệt web</div>
+            <div class="checks" style="margin-top:8px">
+              <label><input type="checkbox" id="c-history" checked> Lịch sử</label>
+              <label><input type="checkbox" id="c-cache" checked> Bộ nhớ đệm</label>
+              <label><input type="checkbox" id="c-cookies"> Cookie & dữ liệu trang (sẽ đăng xuất)</label>
+              <label><input type="checkbox" id="c-downloads"> Danh sách tải xuống</label>
+            </div>
+          </div>
+          <button class="btn danger" id="clear">Xoá dữ liệu</button>
+        </div>
+      </div>
+
+      <h2>Trình duyệt mặc định</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Đặt Metal Browser làm trình duyệt mặc định</div><div class="desc">Windows sẽ mở trang Ứng dụng mặc định để bạn chọn Metal Browser.</div></div>
+          <button class="btn" id="default-browser">Đặt mặc định</button>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="common.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>
