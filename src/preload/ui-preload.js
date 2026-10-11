@@ -5,7 +5,7 @@ const { injectBrowserAction } = require('electron-chrome-extensions/browser-acti
 // Đăng ký thẻ <browser-action-list> hiển thị nút của các extension.
 injectBrowserAction()
 
-const CHANNELS = ['state', 'focus-address', 'find-open', 'find-result', 'downloads', 'open-media']
+const CHANNELS = ['state', 'focus-address', 'find-open', 'find-result', 'downloads', 'open-media', 'password-prompt', 'dialog']
 
 contextBridge.exposeInMainWorld('ui', {
   send: (type, payload) => ipcRenderer.send('ui:action', type, payload),

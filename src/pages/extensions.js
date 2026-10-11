@@ -40,7 +40,7 @@ $('#list').addEventListener('click', async (ev) => {
   if (btn.dataset.act === 'options') api('openOptions', ext.optionsUrl)
   if (btn.dataset.act === 'store') api('openUrl', ext.webstore)
   if (btn.dataset.act === 'remove') {
-    if (!confirm(`Gỡ bỏ "${ext.name}"?`)) return
+    if (!(await ask(`Gỡ bỏ "${ext.name}"?`, { message: 'Tiện ích sẽ bị xoá khỏi Metal Browser.', ok: 'Gỡ bỏ', danger: true }))) return
     load(await api('removeExtension', ext.id))
     toast(`Đã gỡ ${ext.name}`)
   }

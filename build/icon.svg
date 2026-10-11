@@ -1,14 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#22c55e"/><stop offset="1" stop-color="#0e7a3a"/>
-    </linearGradient>
-    <linearGradient id="h" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fde047"/><stop offset="1" stop-color="#f59e0b"/>
-    </linearGradient>
-  </defs>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#g)"/>
-  <circle cx="256" cy="256" r="150" fill="none" stroke="#fff" stroke-width="28" opacity=".95"/>
-  <path d="M106 256h300M256 106c-60 70-60 230 0 300M256 106c60 70 60 230 0 300" fill="none" stroke="#fff" stroke-width="20" opacity=".55" stroke-linecap="round"/>
-  <path d="M330 320a18 18 0 0 1 18-18h34v-40a18 18 0 0 1 36 0v40h34a18 18 0 0 1 0 36h-34v40a18 18 0 0 1-36 0v-40h-34a18 18 0 0 1-18-18z" fill="url(#h)" stroke="#0e7a3a" stroke-width="10"/>
+<title>Metal Browser</title>
+<rect x="16" y="16" width="480" height="480" rx="96" fill="#9AA1AA"/>
+<g transform="translate(52 54)">
+<path fill-rule="evenodd" d="M0 56 V0 H13 L24 20 L35 0 H48 V56 H35 V24 L24 42 L13 24 V56 Z M58 0 H92 V13 H71 V21.5 H88 V34.5 H71 V43 H92 V56 H58 Z M102 0 H142 V13 H128.5 V56 H115.5 V13 H102 Z M150 56 L165 0 H181 L196 56 H182.5 L179.5 45 H166.5 L163.5 56 Z M169.5 33 H176.5 L173 19 Z M206 0 H219 V43 H238 V56 H206 Z" fill="#121212"/>
+</g>
+<circle cx="92" cy="420" r="16" fill="#6F7680"/>
+<circle cx="420" cy="420" r="16" fill="#6F7680"/>
+<g transform="translate(360 24) scale(4.6)">
+<path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z" fill="#FF5A1F"/>
+</g>
+<rect x="216" y="150" width="80" height="130" fill="#121212"/>
+<polygon points="148,262 364,262 256,372" fill="#121212"/>
+<rect x="148" y="396" width="216" height="28" rx="14" fill="#121212"/>
 </svg>

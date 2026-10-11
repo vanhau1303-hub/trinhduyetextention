@@ -66,7 +66,7 @@ function renderTabs() {
       el.className = 'tab'
       el.draggable = true
       el.dataset.id = t.id
-      el.innerHTML = '<span class="tab-icon"></span><span class="tab-title"></span><button class="tab-audio hidden"></button><button class="tab-close" title="Đóng tab (Ctrl+W)"></button>'
+      el.innerHTML = '<span class="tab-icon"></span><span class="tab-title"></span><button class="tab-audio hidden"></button><button class="tab-close" title="Đóng tab (Ctrl+W)"></button><span class="ear"></span>'
       el.querySelector('.tab-close').innerHTML = I.close
       bindTab(el)
       tabEls.set(t.id, el)
@@ -159,14 +159,21 @@ function renderToolbar() {
   reload.title = t?.loading ? 'Dừng tải (Esc)' : 'Tải lại (F5)'
   if (!editing) address.value = t?.url || ''
   const site = $('#site-icon')
-  site.classList.toggle('secure', !!t?.secure)
-  site.innerHTML = !t || !t.url ? I.search : t.secure ? I.lock : I.info
-  site.title = t?.secure ? 'Kết nối an toàn (HTTPS)' : t?.url ? 'Kết nối không được mã hoá' : ''
+  const req = state.permRequest
+  site.classList.toggle('secure', !!t?.secure && !req)
+  site.classList.toggle('alert', !!req)
+  site.innerHTML = req ? I[req.icon] || I.tune : !t || !t.url ? I.search : t.secure ? I.lock : I.info
+  site.title = t?.url && /^https?:/.test(t.url) ? 'Thông tin trang và quyền (vị trí, camera, thông báo…)' : ''
+  renderPermChip(req)
   const star = $('#btn-star')
   star.classList.toggle('on', !!state.bookmarked)
   star.innerHTML = state.bookmarked ? I.starFilled : I.star
   star.classList.toggle('hidden', !t?.url)
-  $('#btn-translate').classList.toggle('hidden', !t?.url || !/^https?:/.test(t.url))
+  const tr = $('#btn-translate')
+  tr.classList.toggle('hidden', !t?.url || !/^https?:/.test(t.url))
+  tr.classList.toggle('on', !!t?.translated)
+  tr.classList.toggle('busy', !!t?.translating)
+  tr.title = t?.translated ? 'Đang xem bản dịch — bấm để xem bản gốc' : 'Dịch trang sang Tiếng Việt (đang bôi đen thì dịch đoạn đó)'
   const media = t?.media || {}
   $('#btn-media').classList.toggle('hidden', !(media.count > 0 || media.ytdlp))
   const zoom = $('#btn-zoom')
@@ -214,28 +221,45 @@ $('#btn-media').addEventListener('click', () => openMediaPanel())
 const backdrop = $('#backdrop')
 let openPanel = null
 
-function showOverlay(panel) {
-  if (openPanel && openPanel !== panel) openPanel.classList.add('hidden')
+function showOverlay(panel, { dim = false } = {}) {
+  if (openPanel && openPanel !== panel) closePanel(openPanel)
   openPanel = panel
   panel.classList.remove('hidden')
   backdrop.classList.remove('hidden')
+  backdrop.classList.toggle('dim', dim)
   ui.send('overlay', { on: true })
+}
+
+// Đóng một bảng; hộp thoại bị đóng ngang coi như bấm Huỷ.
+function closePanel(panel) {
+  panel.classList.add('hidden')
+  if (panel === dialogEl && dialogEl.dataset.id) {
+    ui.send('dialog-result', { id: dialogEl.dataset.id, button: null })
+    dialogEl.dataset.id = ''
+    setTimeout(showNextDialog, 0)
+  }
 }
 
 function hideOverlay() {
   if (!openPanel) return
-  openPanel.classList.add('hidden')
+  const panel = openPanel
   openPanel = null
+  closePanel(panel)
+  if (openPanel) return // closePanel đã mở hộp thoại kế tiếp
   backdrop.classList.add('hidden')
+  backdrop.classList.remove('dim')
   ui.send('overlay', { on: false })
 }
 
 backdrop.addEventListener('mousedown', () => {
+  // Hộp thoại phải bấm nút mới đóng.
+  if (openPanel === dialogEl) return
   hideOverlay()
   if (editing) address.blur()
 })
 window.addEventListener('blur', () => {
-  if (openPanel && openPanel !== $('#suggestions')) hideOverlay()
+  // Hộp thoại và hỏi lưu mật khẩu giữ nguyên khi chuyển sang cửa sổ khác.
+  if (openPanel && !['suggestions', 'dialog', 'password-panel'].includes(openPanel.id)) hideOverlay()
 })
 
 function placeUnder(panel, anchor, width, alignRight = false) {
@@ -362,11 +386,14 @@ async function openMediaPanel() {
       <option value="480">480p</option>
       <option value="audio">Chỉ âm thanh (MP3)</option>
     </select>`
-  let html = `<div class="panel-head">Tải video / nhạc <small>${items.length} tệp tìm thấy</small></div><div class="panel-body">`
+  const nVideo = items.filter((m) => m.type !== 'audio').length
+  const nAudio = items.length - nVideo
+  const found = [nVideo ? `${nVideo} video` : '', nAudio ? `${nAudio} nhạc` : ''].filter(Boolean).join(' · ')
+  let html = `<div class="panel-head">Tải video / nhạc <small>${found}</small></div><div class="panel-body">`
   if (res.ytdlp || items.some((m) => m.stream)) {
     html += `<div class="ytdlp-box">
       <div class="row">${quality}${res.ytdlp ? '<button class="btn" id="yt-go">Tải video trang này</button>' : ''}</div>
-      <div class="panel-note" style="padding:6px 2px 0">${res.ytdlp ? 'Hỗ trợ YouTube, Facebook, TikTok, Instagram, X… ' : ''}Luồng HLS/DASH (JW Player…) được ghép thành MP4. ${res.hasYtdlp && res.hasFfmpeg ? '' : 'Lần đầu sẽ tự tải công cụ yt-dlp / ffmpeg.'}</div>
+      ${!items.length && res.streaming ? '<div class="panel-note" style="padding:6px 2px 0">Trang đang phát video dạng luồng nhưng giấu link — bấm <b>Tải video trang này</b>.</div>' : ''}
     </div>`
   }
   const fmtSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n > 1024 ? `${Math.round(n / 1024)} KB` : '')
@@ -376,11 +403,11 @@ async function openMediaPanel() {
       const u = new URL(m.url)
       name = decodeURIComponent(u.pathname.split('/').pop() || u.hostname)
     } catch {}
-    if (m.title && m.stream) name = m.title
+    if (m.stream) name = m.title || res.title || name
     const det = [
       m.player || '',
       m.label || '',
-      m.stream === 'hls' ? 'Luồng HLS (m3u8)' : m.stream === 'dash' ? 'Luồng DASH (mpd)' : '',
+      m.stream ? 'Video đầy đủ (ghép thành MP4)' : '',
       m.width && m.height ? `${m.width}×${m.height}` : '',
       m.duration ? `${Math.floor(m.duration / 60)}:${String(m.duration % 60).padStart(2, '0')}` : '',
       fmtSize(m.size),
@@ -389,8 +416,7 @@ async function openMediaPanel() {
       <div class="meta"><div class="name" title="${esc(m.url)}">${esc(name)}</div><div class="det">${esc(det || (m.type === 'audio' ? 'Âm thanh' : 'Video'))}</div></div>
       <button class="btn ghost" data-i="${i}">Tải</button></div>`
   }
-  if (!items.length && !res.ytdlp) html += '<div class="panel-note">Không tìm thấy video hoặc âm thanh trên trang này. Hãy bấm phát video vài giây rồi mở lại bảng này.</div>'
-  else if (!items.length) html += '<div class="panel-note">Chưa bắt được link video. Nếu tải bằng nút trên không được, hãy bấm phát video vài giây rồi mở lại bảng này.</div>'
+  if (!items.length && !res.ytdlp) html += '<div class="panel-note">Chưa thấy video. Bấm phát video vài giây rồi mở lại bảng này.</div>'
   html += '</div>'
   mediaPanel.innerHTML = html
   const chosenQuality = () => mediaPanel.querySelector('#yt-quality')?.value || 'best'
@@ -404,6 +430,124 @@ async function openMediaPanel() {
       hideOverlay()
     })
   )
+}
+
+// ---------- Hỏi lưu mật khẩu ----------
+const pwPanel = $('#password-panel')
+
+ui.on('password-prompt', (p) => {
+  let host = p.origin
+  try {
+    host = new URL(p.origin).hostname
+  } catch {}
+  pwPanel.innerHTML = `<div class="panel-head">${p.update ? 'Cập nhật mật khẩu?' : 'Lưu mật khẩu?'} <small>${esc(host)}</small></div>
+    <div class="pw-body">
+      <label>Tên đăng nhập<input id="pw-user" type="text" spellcheck="false" value="${esc(p.username)}" placeholder="(không có)"></label>
+      <label>Mật khẩu<input type="password" value="••••••••••" disabled></label>
+      <div class="panel-note" style="padding:2px 0 0">🔒 Mật khẩu được mã hoá bằng tài khoản Windows và chỉ lưu trên máy này.</div>
+    </div>
+    <div class="panel-foot">
+      ${p.update ? '' : '<button class="btn ghost" data-a="never">Không bao giờ</button>'}
+      <button class="btn ghost" data-a="dismiss">Bỏ qua</button>
+      <button class="btn" data-a="save">${p.update ? 'Cập nhật' : 'Lưu'}</button>
+    </div>`
+  placeUnder(pwPanel, omnibox, 340, true)
+  showOverlay(pwPanel)
+  pwPanel.querySelectorAll('[data-a]').forEach((b) =>
+    b.addEventListener('click', () => {
+      ui.send('password-save', { action: b.dataset.a, username: pwPanel.querySelector('#pw-user').value })
+      hideOverlay()
+    })
+  )
+})
+
+// ---------- Hỏi quyền trên thanh địa chỉ ----------
+function renderPermChip(req) {
+  const chip = $('#perm-chip')
+  if (!req) {
+    chip.classList.add('hidden')
+    chip.dataset.id = ''
+    return
+  }
+  if (chip.dataset.id === req.id) return
+  chip.dataset.id = req.id
+  chip.innerHTML = `<span class="txt" title="${esc(req.host)} muốn ${esc(req.text)}">${esc(req.host)} muốn ${esc(req.text)}</span>
+    <button class="allow">Cho phép</button><button class="block">Chặn</button><button class="x" title="Để sau">${I.close}</button>`
+  chip.classList.remove('hidden')
+  chip.querySelector('.allow').onclick = () => ui.send('permission-answer', { id: req.id, decision: 'allow' })
+  chip.querySelector('.block').onclick = () => ui.send('permission-answer', { id: req.id, decision: 'block' })
+  chip.querySelector('.x').onclick = () => ui.send('permission-answer', { id: req.id, decision: 'dismiss' })
+}
+
+// ---------- Thông tin trang & quyền ----------
+const sitePanel = $('#site-panel')
+const PERM_CHOICES = [['default', 'Mặc định'], ['ask', 'Hỏi'], ['allow', 'Cho phép'], ['block', 'Chặn']]
+const CHOICE_LABEL = { ask: 'Hỏi', allow: 'Cho phép', block: 'Chặn' }
+
+$('#site-icon').addEventListener('click', async () => {
+  const info = await ui.invoke('site-info')
+  if (!info) return
+  sitePanel.innerHTML = `<div class="site-head"><div class="big ${info.secure ? 'secure' : ''}">${info.secure ? I.lock : I.info}</div>
+      <div><div class="host">${esc(info.host)}</div><div class="sub">${info.secure ? 'Kết nối an toàn (HTTPS)' : 'Kết nối không được mã hoá — đừng nhập mật khẩu'}</div></div></div>
+    <div class="site-facts"><span>${I.cookie} ${info.cookies} cookie</span>${info.passwords ? `<span>${I.key} ${info.passwords} mật khẩu đã lưu</span>` : ''}</div>
+    <div class="panel-body">${info.perms
+      .map((p) => `<div class="perm-row ${p.value !== 'default' ? 'custom' : ''}"><span class="pi">${I[p.icon] || I.tune}</span><span class="pl">${esc(p.label)}</span>
+        <select data-key="${p.key}">${PERM_CHOICES.map(([v, l]) => `<option value="${v}" ${p.value === v ? 'selected' : ''}>${v === 'default' ? `${l} (${CHOICE_LABEL[p.fallback]})` : l}</option>`).join('')}</select></div>`)
+      .join('')}</div>
+    <div class="panel-foot"><button class="btn text" id="site-settings">Cài đặt quyền…</button><button class="btn ghost" id="site-reset">Đặt lại quyền</button></div>`
+  sitePanel.querySelectorAll('select').forEach((sel) =>
+    sel.addEventListener('change', () => {
+      ui.send('site-permission', { origin: info.origin, key: sel.dataset.key, value: sel.value })
+      sel.closest('.perm-row').classList.toggle('custom', sel.value !== 'default')
+    })
+  )
+  sitePanel.querySelector('#site-reset').onclick = () => {
+    ui.send('site-reset', { origin: info.origin })
+    hideOverlay()
+  }
+  sitePanel.querySelector('#site-settings').onclick = () => {
+    hideOverlay()
+    ui.send('open-internal', { page: 'settings' })
+  }
+  const r = $('#site-icon').getBoundingClientRect()
+  sitePanel.style.width = '340px'
+  sitePanel.style.left = `${Math.max(8, r.left - 6)}px`
+  sitePanel.style.top = `${r.bottom + 8}px`
+  sitePanel.style.transformOrigin = 'top left'
+  showOverlay(sitePanel)
+})
+
+// ---------- Hộp thoại (thay cho hộp thoại Windows) ----------
+const dialogEl = $('#dialog')
+const dialogQueue = []
+
+ui.on('dialog', (d) => {
+  dialogQueue.push(d)
+  if (!dialogEl.dataset.id) showNextDialog()
+})
+
+function showNextDialog() {
+  const d = dialogQueue.shift()
+  if (!d) return
+  dialogEl.dataset.id = d.id
+  const icon = !d.icon ? I.infoBig : d.icon.startsWith('data:') ? `<img src="${esc(d.icon)}" alt="">` : I[d.icon === 'info' ? 'infoBig' : d.icon] || I.infoBig
+  dialogEl.innerHTML = `<div class="d-top"><div class="d-icon ${esc(d.icon || '')}">${icon}</div><div style="min-width:0">
+      <div class="d-title">${esc(d.title || '')}</div><div class="d-msg">${esc(d.message || '')}</div>
+      ${d.list?.length ? `<ul>${d.list.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div></div>
+    <div class="d-buttons">${(d.buttons || [{ id: 'ok', label: 'OK', primary: true }])
+      .map((b) => `<button class="btn ${b.primary ? '' : b.danger ? 'danger' : 'text'}" data-b="${esc(b.id)}">${esc(b.label)}</button>`)
+      .join('')}</div>`
+  dialogEl.querySelectorAll('[data-b]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const id = dialogEl.dataset.id
+      dialogEl.dataset.id = ''
+      ui.send('dialog-result', { id, button: btn.dataset.b })
+      hideOverlay()
+      showNextDialog()
+    })
+  )
+  showOverlay(dialogEl, { dim: true })
+  dialogEl.querySelector('.btn:not(.text)')?.focus()
 }
 
 // ---------- Bảng tải xuống ----------
@@ -420,7 +564,7 @@ function renderDownloadsPanel() {
   dlPanel.innerHTML = `<div class="panel-head">Tải xuống gần đây</div><div class="panel-body">${list
     .map(
       (d) => `<div class="dl-item" data-id="${esc(d.id)}"><span class="ico">${I.file}</span><div class="meta">
-        <div class="name" title="${esc(d.filename)}">${esc(d.filename)}</div><div class="det">${esc(stateText(d))}</div>
+        <div class="name" title="${esc(d.filename)}">${esc(d.filename)}</div><div class="det${d.state === 'interrupted' ? ' err' : ''}" title="${esc(d.error || '')}">${esc(stateText(d))}</div>
         ${d.state === 'progressing' ? `<div class="bar"><i style="width:${d.percent || 0}%"></i></div>` : ''}</div>
         <button class="icon-btn" data-show="${esc(d.id)}" title="Mở thư mục chứa">${I.folder}</button></div>`
     )
@@ -543,4 +687,5 @@ ui.on('open-media', () => openMediaPanel())
 // Phím Esc trong UI đóng bảng đang mở.
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && openPanel && openPanel !== sugBox) hideOverlay()
+  if (e.key === 'Enter' && openPanel === dialogEl) dialogEl.querySelector('.btn:not(.text)')?.click()
 })

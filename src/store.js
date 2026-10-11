@@ -43,13 +43,18 @@ const DEFAULT_SETTINGS = {
   forceDarkPages: false,
   uiTheme: 'system', // system | light | dark
   showBookmarksBar: true,
-  restoreSession: true,
+  restoreSession: true, // cũ (trước 1.3.0); nay dùng startup
+  // Khi khởi động: restore = mở lại các tab lần trước, newtab = trang Tab mới, pages = các trang trong startupPages
+  startup: '',
+  startupPages: [],
+  offerSavePasswords: true,
   askWhereToSave: false,
   downloadDir: '',
   disabledExtensions: [],
   unpackedExtensions: [],
   translateTarget: 'vi',
-  newtabBackground: '',
+  newtabBackground: '', // ảnh riêng (data URL), ưu tiên hơn newtabTheme
+  newtabTheme: 'aurora', // hình nền gradient có sẵn trên trang Tab mới (none = không dùng)
   // DNS-over-HTTPS để tránh bị nhà mạng chặn web qua DNS: off | cloudflare | google | quad9 | adguard | custom
   secureDns: 'cloudflare',
   secureDnsCustom: '',
@@ -83,6 +88,7 @@ function getStores() {
       bookmarks: new JsonStore('bookmarks', []),
       session: new JsonStore('session', { windows: [] }),
       downloads: new JsonStore('downloads', []),
+      passwords: new JsonStore('passwords', { entries: [], never: [] }),
     }
   }
   return stores

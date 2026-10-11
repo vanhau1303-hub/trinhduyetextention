@@ -71,9 +71,11 @@ class Tab {
     })
     wc.on('did-navigate', (_e, url, httpCode) => {
       this.ctx.media.clear(wc.id)
+      this.ctx.permissions.dropForTab(this.win, wc.id)
       this.crashed = false
       this.favicon = ''
       this.media = { count: 0, ytdlp: false }
+      this.translated = false
       if (httpCode < 400 || httpCode === undefined) this.history?.add(url, wc.getTitle())
       update()
       this.win.scheduleSessionSave()
@@ -99,14 +101,14 @@ class Tab {
       this.loading = false
       update()
     })
-    wc.on('unresponsive', () => {
-      const choice = dialog.showMessageBoxSync(this.win.win, {
-        type: 'warning',
-        buttons: ['Chờ', 'Tải lại trang'],
+    wc.on('unresponsive', async () => {
+      const choice = await this.win.dialog({
+        icon: 'warning',
         title: 'Trang không phản hồi',
-        message: `Trang "${this.title}" không phản hồi.`,
+        message: `"${this.title}" đang bị treo. Bạn có thể chờ hoặc tải lại trang.`,
+        buttons: [{ id: 'wait', label: 'Chờ' }, { id: 'reload', label: 'Tải lại trang', primary: true }],
       })
-      if (choice === 1) {
+      if (choice === 'reload' && !wc.isDestroyed()) {
         wc.forcefullyCrashRenderer()
         wc.reload()
       }
@@ -205,6 +207,8 @@ class Tab {
       zoom: Math.round(wc.getZoomFactor() * 100),
       pinned: this.pinned,
       media: this.media,
+      translated: !!this.translated,
+      translating: !!this.translating,
       secure: url.startsWith('https://'),
       internal: url.startsWith('metal://') || url === '',
     }
@@ -227,6 +231,8 @@ class BrowserWin {
     this.overlay = false
     this.htmlFullscreen = false
     this.stateTimer = null
+    this.permRequests = [] // lời hỏi quyền đang chờ (hiện trên thanh địa chỉ)
+    this.dialogs = new Map() // id -> resolve của hộp thoại đang mở trên giao diện
 
     const dark = nativeTheme.shouldUseDarkColors
     this.win = new BaseWindow({
@@ -280,6 +286,7 @@ class BrowserWin {
     })
     this.win.on('close', () => {
       this.closing = true
+      for (const id of [...this.dialogs.keys()]) this.resolveDialog(id, null)
       this.ctx.onWindowClosing(this)
     })
     this.win.on('closed', () => this.ctx.onWindowClosed(this))
@@ -332,6 +339,25 @@ class BrowserWin {
     this.layout()
   }
 
+  // Hộp thoại vẽ trong giao diện trình duyệt (thay cho hộp thoại Windows), trả về id nút được bấm.
+  // opts: { title, message, detail, icon: 'info'|'warning'|'error'|dataURL, buttons: [{ id, label, primary, danger }] }
+  dialog(opts) {
+    return new Promise((resolve) => {
+      if (this.win.isDestroyed()) return resolve(null)
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      this.dialogs.set(id, resolve)
+      if (this.win.isMinimized()) this.win.restore()
+      this.sendUi('dialog', { id, ...opts })
+    })
+  }
+
+  resolveDialog(id, result) {
+    const resolve = this.dialogs.get(id)
+    if (!resolve) return
+    this.dialogs.delete(id)
+    resolve(result)
+  }
+
   sendUi(channel, ...args) {
     if (!this.ui.webContents.isDestroyed()) this.ui.webContents.send(channel, ...args)
   }
@@ -349,6 +375,7 @@ class BrowserWin {
         bookmarked: active ? this.ctx.bookmarks.has(active.url) : false,
         maximized: this.win.isMaximized(),
         incognito: this.incognito,
+        permRequest: this.activeTab ? this.ctx.permissions.pendingFor(this, this.activeTab.id) : null,
         ...this.ctx.uiExtras(),
       })
       if (this.activeTab) this.win.setTitle(`${this.activeTab.title} - Metal Browser${this.incognito ? " (Ẩn danh)" : ""}`)
@@ -439,6 +466,7 @@ class BrowserWin {
   }
 
   onTabDestroyed(tab) {
+    this.ctx.permissions.dropForTab(this, tab.id)
     if (this.tabs.includes(tab)) {
       if (this.activeTab === tab) {
         this.activeTab = null

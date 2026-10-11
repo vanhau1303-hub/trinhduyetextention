@@ -10,6 +10,7 @@ const { EventEmitter } = require('node:events')
 const { spawn, execFile } = require('node:child_process')
 const { app, net } = require('electron')
 const AdmZip = require('adm-zip')
+const { log } = require('./logger')
 
 const FFMPEG_URL = 'https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
 const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
@@ -26,6 +27,28 @@ const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)(\?|#|$)/i
 const MEDIA_EXT = /\.(mp4|webm|m4v|mov|mkv|flv|m3u8|mpd|mp3|m4a|aac|ogg|oga|opus|wav|flac)(\?|#|$)/i
 // Mảnh nhỏ của luồng (segment) và YouTube (đã có yt-dlp lo) thì bỏ qua.
 const IGNORE_RE = /googlevideo\.com|\.(ts|m4s|aac\.ts)(\?|$)|\/range\/|[?&]range=|\/seg-?\d+|\/segment\d+|\/chunk[-_]?\d+/i
+
+// File media nhỏ hơn mức này (tiếng bấm nút, hiệu ứng, ảnh động) không phải video/nhạc thật.
+const MIN_MEDIA_BYTES = 300 * 1024
+const MIN_MEDIA_SECONDS = 15
+// Link playlist "giấu" (không có đuôi .m3u8, Content-Type text/plain...) thường có những chữ này.
+const PLAYLIST_HINT = /m3u8|mpd|playlist|manifest|master|\/hls\/|\/dash\/|index\.(txt|json)|stream|video|vod/i
+const NOT_PLAYLIST = /\.(js|css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|html?)(\?|#|$)/i
+
+// Đổi lỗi kỹ thuật của yt-dlp thành câu dễ hiểu (chi tiết đầy đủ nằm trong nhật ký).
+function friendlyError(errText = '', code) {
+  if (/10061|10060|getaddrinfo|Failed to establish a new connection|Connection refused|timed out/i.test(errText)) {
+    return 'Không kết nối được tới trang web (có thể bị nhà mạng chặn hoặc mạng chập chờn).'
+  }
+  if (/Unsupported URL|No video formats found|Unable to extract/i.test(errText)) {
+    return 'Trang này không tải tự động được. Hãy bấm phát video vài giây rồi mở lại bảng "Tải video".'
+  }
+  if (/HTTP Error 403|Forbidden/i.test(errText)) return 'Trang từ chối cho tải (403). Thử phát video rồi tải lại từ bảng "Tải video".'
+  if (/HTTP Error 404/i.test(errText)) return 'Không tìm thấy video (404) — link có thể đã hết hạn.'
+  if (/Sign in|login|private|members/i.test(errText)) return 'Video cần đăng nhập. Hãy đăng nhập trang đó trong Metal Browser rồi tải lại.'
+  if (/DRM/i.test(errText)) return 'Video được bảo vệ bản quyền (DRM), không tải được.'
+  return errText ? `Tải thất bại: ${errText.replace(/^ERROR:\s*/, '').slice(0, 160)}` : `yt-dlp thoát với mã ${code}`
+}
 
 function streamKind(url, contentType = '') {
   const ct = contentType.toLowerCase()
@@ -81,20 +104,40 @@ class MediaTools extends EventEmitter {
     this.installing = {}
     this.ffmpeg = undefined
     this.sniffed = new Map() // webContentsId -> Map(url -> item)
+    this.candidates = new Map() // webContentsId -> Map(url -> { referer, checked }) : có thể là playlist bị giấu
+    this.segmentHints = new Set() // webContentsId đã thấy tải mảnh video (.ts/.m4s) => trang đang phát luồng
+    this.seq = 0
   }
 
   // Nghe phản hồi mạng để bắt link media mà trang tải bằng JS (HLS của JW Player, link không có đuôi...).
   // Dùng onResponseStarted vì bộ chặn quảng cáo đã chiếm onBeforeRequest/onHeadersReceived.
   attachSniffer(ses = this.session) {
     ses.webRequest.onResponseStarted({ urls: ['http://*/*', 'https://*/*'] }, (d) => {
-      if (!d.webContentsId || d.statusCode >= 400 || IGNORE_RE.test(d.url)) return
+      if (!d.webContentsId || d.statusCode >= 400) return
       const headers = d.responseHeaders || {}
       const header = (name) => {
         const key = Object.keys(headers).find((k) => k.toLowerCase() === name)
         return key ? String(headers[key][0] || '') : ''
       }
       const ct = header('content-type').toLowerCase()
+      // Mảnh của luồng: không liệt kê, nhưng ghi nhận là trang đang phát video dạng luồng.
+      if (/mp2t|iso\.segment/.test(ct) || /\.(ts|m4s)(\?|$)/i.test(d.url)) {
+        if (!this.segmentHints.has(d.webContentsId)) {
+          this.segmentHints.add(d.webContentsId)
+          this.emit('found', d.webContentsId)
+        }
+        return
+      }
+      if (IGNORE_RE.test(d.url)) return
       const kind = streamKind(d.url, ct)
+      // Có thể là playlist bị giấu (vd. /api/playlist?id=… trả text/plain): để dành, kiểm tra nội dung khi quét.
+      if (!kind && ['xhr', 'other', 'fetch'].includes(d.resourceType) && /^(|text\/plain|application\/octet-stream|binary\/octet-stream|application\/x-mpegurl.*)$/.test(ct.split(';')[0]) &&
+        PLAYLIST_HINT.test(d.url) && !NOT_PLAYLIST.test(d.url)) {
+        let cands = this.candidates.get(d.webContentsId)
+        if (!cands) this.candidates.set(d.webContentsId, (cands = new Map()))
+        if (cands.size < 20 && !cands.has(d.url)) cands.set(d.url, { referer: d.referrer || '', checked: false })
+        return
+      }
       let type = ''
       if (kind) type = 'video'
       else if (/^video\/(?!mp2t|iso\.segment)/.test(ct)) type = 'video'
@@ -108,7 +151,7 @@ class MediaTools extends EventEmitter {
       if (!list) this.sniffed.set(d.webContentsId, (list = new Map()))
       if (list.size >= 60 && !list.has(d.url)) return
       const prev = list.get(d.url)
-      list.set(d.url, { ...prev, url: d.url, type, stream: kind, size: Math.max(size, prev?.size || 0), mime: ct, referer: d.referrer || prev?.referer || '', source: 'network', partial: d.statusCode === 206 })
+      list.set(d.url, { ...prev, url: d.url, type, stream: kind, size: Math.max(size, prev?.size || 0), mime: ct, referer: d.referrer || prev?.referer || '', source: 'network', partial: d.statusCode === 206, seq: prev?.seq ?? this.seq++ })
       if (!prev) this.emit('found', d.webContentsId)
     })
   }
@@ -116,6 +159,32 @@ class MediaTools extends EventEmitter {
   // Gọi khi tab chuyển sang trang khác.
   clear(webContentsId) {
     this.sniffed.delete(webContentsId)
+    this.candidates.delete(webContentsId)
+    this.segmentHints.delete(webContentsId)
+  }
+
+  // Tải thử 1 KB đầu của các link khả nghi: bắt đầu bằng #EXTM3U là playlist HLS, có <MPD là DASH.
+  async verifyCandidates(webContents) {
+    const cands = this.candidates.get(webContents.id)
+    if (!cands) return
+    const pending = [...cands.entries()].filter(([, c]) => !c.checked).slice(0, 8)
+    await Promise.all(
+      pending.map(async ([url, c]) => {
+        c.checked = true
+        try {
+          const res = await webContents.session.fetch(url, {
+            headers: { Referer: c.referer || webContents.getURL(), Range: 'bytes=0-1023' },
+            signal: AbortSignal.timeout(3000),
+          })
+          const head = (await res.text()).slice(0, 1024).trimStart()
+          const stream = head.startsWith('#EXTM3U') ? 'hls' : /<MPD[\s>]/.test(head) ? 'dash' : ''
+          if (!stream) return
+          let list = this.sniffed.get(webContents.id)
+          if (!list) this.sniffed.set(webContents.id, (list = new Map()))
+          list.set(url, { url, type: 'video', stream, referer: c.referer, source: 'network', master: /#EXT-X-STREAM-INF/.test(head), seq: this.seq++ })
+        } catch {}
+      })
+    )
   }
 
   isYtdlpSite(url) {
@@ -159,16 +228,28 @@ class MediaTools extends EventEmitter {
         }
       })
     )
+    await this.verifyCandidates(webContents)
     for (const it of this.sniffed.get(webContents.id)?.values() || []) put(it)
     let all = [...merged.values()]
     // Đã có manifest HLS/DASH thì các mảnh tải theo byte-range (chỉ hình hoặc chỉ tiếng) là thừa.
     if (all.some((m) => m.stream)) all = all.filter((m) => m.stream || !m.partial)
-    // Luồng HLS/DASH lên đầu (thường là bản đầy đủ), rồi đến file lớn.
-    const items = all
-      .sort((a, b) => (b.stream ? 1 : 0) - (a.stream ? 1 : 0) || (parseInt(b.label) || b.height || 0) - (parseInt(a.label) || a.height || 0) || (b.size || 0) - (a.size || 0))
-      .slice(0, 40)
-    const ytdlp = this.isYtdlpSite(url) || blobVideos > 0 || videoCount > 0
-    return { items, videoCount, blobVideos, ytdlp, pageUrl: url, title: webContents.getTitle() }
+    // Bỏ file rác: tiếng bấm nút, hiệu ứng, quảng cáo vài giây.
+    all = all.filter((m) => m.stream || !((m.size && m.size < MIN_MEDIA_BYTES) || (m.duration && m.duration < MIN_MEDIA_SECONDS)))
+    // Mỗi loại luồng chỉ giữ 1 link (playlist tổng nếu có): chất lượng chọn bằng ô "Chất lượng".
+    const streams = []
+    for (const kind of ['hls', 'dash']) {
+      const pick = all
+        .filter((m) => m.stream === kind)
+        .sort((a, b) => (b.master ? 1 : 0) - (a.master ? 1 : 0) || (/master|playlist/i.test(b.url) ? 1 : 0) - (/master|playlist/i.test(a.url) ? 1 : 0) || (a.seq ?? 1e9) - (b.seq ?? 1e9))[0]
+      if (pick) streams.push(pick)
+    }
+    const files = all
+      .filter((m) => !m.stream)
+      .sort((a, b) => (a.type === 'audio' ? 1 : 0) - (b.type === 'audio' ? 1 : 0) || (parseInt(b.label) || b.height || 0) - (parseInt(a.label) || a.height || 0) || (b.size || 0) - (a.size || 0))
+    const items = [...streams, ...files].slice(0, 12)
+    const streaming = this.segmentHints.has(webContents.id)
+    const ytdlp = this.isYtdlpSite(url) || blobVideos > 0 || videoCount > 0 || streaming
+    return { items, videoCount, blobVideos, streaming, ytdlp, pageUrl: url, title: webContents.getTitle() }
   }
 
   // Tải 1 link media đã bắt được. Link trực tiếp dùng trình tải xuống; luồng HLS/DASH dùng yt-dlp.
@@ -394,12 +475,16 @@ class MediaTools extends EventEmitter {
       if (ffmpeg && quality !== 'audio') args.push('--remux-video', 'mp4')
     }
     // Cửa sổ ẩn danh: lấy cookie của phiên ẩn danh, không phải của hồ sơ chính.
+    // DNS bảo mật đang bật: đi qua proxy nội bộ để yt-dlp phân giải tên miền giống trình duyệt.
+    const proxy = this.getProxy ? await this.getProxy().catch(() => '') : ''
+    if (proxy) args.push('--proxy', proxy)
     const cookieFile = await this.writeCookies(opts.cookieUrls || [target], opts.session).catch(() => null)
     if (cookieFile) args.push('--cookies', cookieFile)
     args.push(target)
 
     d.state = 'progressing'
     d.error = ''
+    log.info('yt-dlp', 'Bắt đầu tải', target, '| chất lượng', quality, '| ffmpeg', ffmpeg ? 'có' : 'không', opts.referer ? `| referer ${opts.referer}` : '')
     const proc = spawn(this.ytdlpPath, args, {
       windowsHide: true,
       env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', ELECTRON_RUN_AS_NODE: '1' },
@@ -423,6 +508,9 @@ class MediaTools extends EventEmitter {
         this.downloads.changed()
       } else if (/^ERROR/.test(line)) {
         errText = line
+        log.error('yt-dlp', line)
+      } else {
+        log.info('yt-dlp', line)
       }
     }
     const buf = { out: '', err: '' }
@@ -445,6 +533,7 @@ class MediaTools extends EventEmitter {
     if (cookieFile) fs.rm(cookieFile, () => {})
     this.downloads.detach(d.id)
     if (d.state === 'cancelled') return { code }
+    log.info('yt-dlp', 'Kết thúc với mã', code)
     const formatMissing = code !== 0 && /Requested format is not available/i.test(errText)
     // Đôi khi antivirus khoá file tạm làm bước đổi tên báo lỗi dù file cuối đã được tạo.
     const renamed = errText.match(/\.temp\.\w+' -> '(.+?)'$/)
@@ -463,7 +552,7 @@ class MediaTools extends EventEmitter {
       this.downloads.emit('completed', d)
     } else if (!formatMissing || ffmpeg) {
       d.state = 'interrupted'
-      d.error = errText || `yt-dlp thoát với mã ${code}`
+      d.error = friendlyError(errText, code)
     }
     d.speed = ''
     this.downloads.changed()

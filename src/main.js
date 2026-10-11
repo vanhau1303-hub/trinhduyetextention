@@ -13,6 +13,10 @@ app.setAppUserModelId('com.metal.browser')
 // Dành cho kiểm thử: dùng thư mục dữ liệu riêng để không đụng vào hồ sơ thật.
 if (process.env.METAL_USER_DATA) app.setPath('userData', process.env.METAL_USER_DATA)
 
+const logger = require('./logger')
+logger.init()
+const { log } = logger
+
 const { getStores, flushAll, SEARCH_ENGINES, DNS_PROVIDERS } = require('./store')
 const stores = getStores()
 const settings = stores.settings
@@ -38,6 +42,12 @@ const { installChromeWebStore, installExtension, uninstallExtension, updateExten
 const { BrowserWin } = require('./window')
 const { DownloadManager, formatBytes } = require('./downloads')
 const { MediaTools } = require('./media')
+const { PasswordManager } = require('./passwords')
+const { DohProxy } = require('./dohproxy')
+const translator = require('./translate')
+const { Permissions, originOf } = require('./permissions')
+
+const passwords = new PasswordManager()
 
 const PAGES_DIR = path.join(__dirname, 'pages')
 const PAGE_PRELOAD = path.join(__dirname, 'preload', 'page-preload.js')
@@ -45,7 +55,9 @@ const EXTENSIONS_DIR = path.join(app.getPath('userData'), 'Extensions')
 // Extension + công cụ đóng gói sẵn trong bộ cài (xem scripts/fetch-vendor.js).
 const VENDOR_DIR = app.isPackaged ? path.join(process.resourcesPath, 'vendor') : path.join(__dirname, '..', 'vendor')
 const BUNDLED_EXT_DIR = path.join(VENDOR_DIR, 'extensions')
-const INTERNAL_PAGES = ['newtab', 'settings', 'extensions', 'history', 'downloads', 'bookmarks', 'error', 'about']
+// Extension đóng gói mặc định ở bản 1.2.0 (Dark Reader, Google Translate, Google Docs Offline, Synology).
+const V120_BUNDLED = ['eimadpbcbfnmbkopoojfekhnkhdbieeh', 'aapbdbdomjkkjkaonfhkkikfgjllcleb', 'ghbmnnjooekpmoecnnnilnnbdlolhkhi', 'aadgfjmilhfblodmkgilohhjlakchfmg']
+const INTERNAL_PAGES = ['newtab', 'settings', 'extensions', 'history', 'downloads', 'bookmarks', 'passwords', 'error', 'about']
 
 // ---------------------------------------------------------------------------
 // Lịch sử & dấu trang
@@ -386,6 +398,27 @@ const ctx = {
     return false
   },
 
+  // Gộp log + thông tin cấu hình (không có mật khẩu, lịch sử) thành 1 file trong thư mục Tải xuống.
+  exportLogs() {
+    const { downloadDir, newtabBackground, secureDnsCustom, startupPages, ...safeSettings } = settings.data
+    const out = logger.exportLogs(this.downloads.dir, {
+      'Cài đặt': safeSettings,
+      Extension: extMgr.list().map((e) => `${e.name} ${e.version}${e.enabled ? '' : ' (tắt)'}`).join(', '),
+      'yt-dlp': this.media.ytdlpPath,
+      ffmpeg: this.media.ffmpeg || '(chưa tìm)',
+      'Cửa sổ đang mở': this.windows.size,
+    })
+    shell.showItemInFolder(out)
+    return out
+  },
+
+  // restore | newtab | pages. Bản cũ chỉ có công tắc restoreSession.
+  startupMode() {
+    const m = settings.data.startup
+    if (['restore', 'newtab', 'pages'].includes(m)) return m
+    return settings.data.restoreSession === false ? 'newtab' : 'restore'
+  },
+
   homeUrl() {
     const h = settings.data.homepage
     return !h || h === 'metal://newtab' ? this.newTabUrl(this.activeWindow()) : h
@@ -425,7 +458,7 @@ const ctx = {
     if (key === 'adblock') this.applyAdblock()
     if (key === 'secureDns' || key === 'secureDnsCustom') this.applyDns()
     this.broadcastState()
-    this.broadcastPages('settings', settings.data)
+    this.broadcastPages('settings', { ...settings.data, startup: this.startupMode() })
   },
 
   broadcastPages(name, ...args) {
@@ -529,7 +562,7 @@ const ctx = {
       sep()
       const url = wc.getURL()
       if (/^https?:/.test(url)) {
-        add({ label: 'Dịch trang này sang Tiếng Việt', click: () => this.translatePage(tab) })
+        add({ label: tab.translated ? 'Hiện bản gốc (bỏ dịch)' : 'Dịch trang này sang Tiếng Việt', click: () => this.translatePage(tab) })
         if (tab.media.count || tab.media.ytdlp) add({ label: '⬇  Tải video/nhạc trên trang...', click: () => win.sendUi('open-media') })
       }
       add({ label: 'Lưu trang thành...', accelerator: 'Ctrl+S', click: () => this.savePage(win) })
@@ -545,6 +578,7 @@ const ctx = {
   async downloadBestMedia(tab, quality) {
     const res = await this.media.scan(tab.wc)
     const stream = res.items.find((m) => m.stream)
+    log.info('media', 'Tải video trang', tab.wc.getURL(), stream ? `→ dùng luồng ${stream.stream}` : '→ để yt-dlp tự tìm')
     const task = stream && !this.media.isYtdlpSite(tab.wc.getURL())
       ? this.media.downloadItem(tab.wc, stream, quality)
       : this.media.downloadWithYtdlp(tab.wc.getURL(), tab.wc.getTitle(), quality, { session: tab.wc.session })
@@ -597,10 +631,27 @@ const ctx = {
     tab.wc.executeJavaScriptInIsolatedWorld(1002, [{ code }]).catch(() => {})
   },
 
-  translatePage(tab) {
+  // Dịch cả trang tại chỗ; bấm lần nữa để xem bản gốc. Lỗi thì mở bằng translate.google.com.
+  async translatePage(tab) {
     const target = settings.data.translateTarget || 'vi'
-    const url = tab.wc.getURL()
-    tab.load(`https://translate.google.com/translate?sl=auto&tl=${target}&u=${encodeURIComponent(url)}`)
+    try {
+      tab.translating = true
+      tab.win.sendState()
+      tab.translated = await translator.togglePage(tab.wc, target)
+    } catch (err) {
+      log.warn('translate', 'Dịch tại chỗ thất bại, chuyển sang translate.google.com:', err.message)
+      tab.load(`https://translate.google.com/translate?sl=auto&tl=${target}&u=${encodeURIComponent(tab.wc.getURL())}`)
+    } finally {
+      tab.translating = false
+      tab.win.sendState()
+    }
+  },
+
+  // Nút Dịch: đang bôi đen chữ thì dịch đoạn đó, không thì dịch cả trang.
+  async translateAction(tab) {
+    const sel = await translator.getSelection(tab.wc)
+    if (sel) return this.quickTranslate(tab, sel, { x: 40, y: 40 })
+    return this.translatePage(tab)
   },
 
   // ---- DNS bảo mật (DNS-over-HTTPS) ----
@@ -665,7 +716,11 @@ const ctx = {
 }
 
 function showError(err) {
-  dialog.showErrorBox('Lỗi', String(err?.message || err))
+  const message = String(err?.message || err)
+  log.error('ui', message)
+  const win = ctx.activeWindow()
+  if (win) win.dialog({ icon: 'error', title: 'Có lỗi xảy ra', message, buttons: [{ id: 'ok', label: 'Đóng', primary: true }] })
+  else dialog.showErrorBox('Lỗi', message)
 }
 
 // ---------------------------------------------------------------------------
@@ -759,16 +814,31 @@ const extMgr = {
   // Chép extension đóng gói sẵn vào hồ sơ nếu chưa có (lần chạy đầu, hoặc bản cài mới thêm extension).
   // Người dùng đã gỡ thì không cài lại. Sau đó Chrome Web Store tự cập nhật như extension bình thường.
   installBundled() {
-    if (!fs.existsSync(BUNDLED_EXT_DIR)) return
+    const bundled = fs.existsSync(BUNDLED_EXT_DIR) ? fs.readdirSync(BUNDLED_EXT_DIR) : []
+    // Extension do trình duyệt tự cài (để biết cái nào được gỡ khi không còn đóng gói kèm).
+    // Bản 1.2.0 chưa ghi lại danh sách này: coi 4 extension đóng gói hồi đó là tự cài.
+    if (!Array.isArray(settings.data.autoInstalledBundled)) {
+      settings.data.autoInstalledBundled = V120_BUNDLED.filter((id) => fs.existsSync(path.join(EXTENSIONS_DIR, id)))
+    }
+    let auto = settings.data.autoInstalledBundled
+    // Không còn đóng gói kèm thì gỡ (chưa nạp nên chỉ cần xoá thư mục).
+    for (const id of auto.filter((x) => !bundled.includes(x))) {
+      fs.rmSync(path.join(EXTENSIONS_DIR, id), { recursive: true, force: true })
+      settings.data.disabledExtensions = settings.data.disabledExtensions.filter((d) => d.id !== id)
+    }
+    auto = auto.filter((x) => bundled.includes(x))
     const removed = new Set(settings.data.removedBundled || [])
-    for (const id of fs.readdirSync(BUNDLED_EXT_DIR)) {
+    for (const id of bundled) {
       if (removed.has(id) || fs.existsSync(path.join(EXTENSIONS_DIR, id))) continue
       try {
         fs.cpSync(path.join(BUNDLED_EXT_DIR, id), path.join(EXTENSIONS_DIR, id), { recursive: true })
+        auto.push(id)
       } catch (err) {
         console.error('Không cài được extension đóng gói sẵn', id, err.message)
       }
     }
+    settings.data.autoInstalledBundled = [...new Set(auto)]
+    settings.save()
   },
 
   async remove(id) {
@@ -921,6 +991,43 @@ function winFromUi(event) {
   return null
 }
 
+// ---------------------------------------------------------------------------
+// IPC: trình quản lý mật khẩu (từ preload của trang web)
+// Mật khẩu chỉ được trả cho đúng origin của frame đang hỏi; UI/extension/trang nội bộ không lấy được.
+// ---------------------------------------------------------------------------
+function tabWindow(wc) {
+  return [...ctx.windows].find((w) => w.tabs.some((t) => t.wc === wc)) || null
+}
+
+ipcMain.on('pw:username', (event, username) => {
+  const origin = PasswordManager.normOrigin(event.senderFrame?.origin)
+  if (origin && typeof username === 'string') passwords.pendingUsernames.set(event.sender.id, { origin, username: username.slice(0, 200) })
+})
+
+ipcMain.on('pw:captured', (event, data = {}) => {
+  if (!settings.data.offerSavePasswords) return
+  const origin = PasswordManager.normOrigin(event.senderFrame?.origin)
+  if (!origin || typeof data.password !== 'string' || !data.password || data.password.length > 1000) return
+  let username = typeof data.username === 'string' ? data.username.slice(0, 200) : ''
+  if (!username) {
+    const pending = passwords.pendingUsernames.get(event.sender.id)
+    if (pending?.origin === origin) username = pending.username
+  }
+  const ask = passwords.captured(origin, username, data.password)
+  const win = tabWindow(event.sender)
+  if (!ask || !win) return
+  win.pendingPassword = ask
+  win.sendUi('password-prompt', { origin: ask.origin, username: ask.username, update: ask.update })
+})
+
+ipcMain.handle('pw:get', (event) => {
+  const origin = PasswordManager.normOrigin(event.senderFrame?.origin)
+  if (!origin || !tabWindow(event.sender)) return []
+  return passwords.forOrigin(origin)
+})
+
+ipcMain.on('pw:used', (_event, id) => passwords.touch(id))
+
 ipcMain.on('ui:action', (event, type, p = {}) => {
   const win = winFromUi(event)
   if (!win) return
@@ -961,17 +1068,42 @@ ipcMain.on('ui:action', (event, type, p = {}) => {
     case 'zoom': return ctx.zoom(win, p.dir)
     case 'open-internal': return ctx.openInternal(p.page)
     case 'open-url': return ctx.openUrl(p.url, { win })
-    case 'translate-page': return tab && ctx.translatePage(tab)
+    case 'translate-page': return tab && ctx.translateAction(tab)
     case 'toggle-adblock': return ctx.setSetting('adblock', !settings.data.adblock)
     case 'app-menu': return showAppMenu(win, p)
     case 'minimize': return win.win.minimize()
     case 'shortcut': return ctx.handleShortcut(win, p, true)
+    case 'dialog-result': return win.resolveDialog(p.id, p.button)
+    case 'permission-answer': return ctx.permissions.answer(win, p.id, p.decision)
+    case 'site-permission': {
+      const origin = originOf(p.origin)
+      if (origin) ctx.permissions.setSite(origin, p.key, p.value)
+      return
+    }
+    case 'site-reset': {
+      const origin = originOf(p.origin)
+      if (origin) ctx.permissions.resetSite(origin)
+      return wc?.reload()
+    }
+    case 'password-save': {
+      const pending = win.pendingPassword
+      win.pendingPassword = null
+      if (!pending) return
+      if (p.action === 'never') return passwords.never(pending.origin)
+      if (p.action !== 'save') return
+      try {
+        passwords.save({ ...pending, username: typeof p.username === 'string' ? p.username.trim() : pending.username })
+      } catch (err) {
+        showError(err)
+      }
+      return
+    }
     case 'download-media': {
       if (!tab) return
       // Mục trong bảng tải video (theo lần quét gần nhất của cửa sổ này).
       const item = typeof p.index === 'number' ? win.lastMediaScan?.items?.[p.index] : null
       if (item) return ctx.media.downloadItem(wc, item, p.quality || 'best').catch(showError)
-      return ctx.media.downloadWithYtdlp(wc.getURL(), wc.getTitle(), p.quality || 'best', { session: wc.session }).catch(showError)
+      return ctx.downloadBestMedia(tab, p.quality || 'best')
     }
     case 'open-downloads': return ctx.openInternal('downloads')
     case 'open-download': return ctx.downloads.open(p.id)
@@ -1005,6 +1137,21 @@ ipcMain.handle('ui:invoke', async (event, type, p = {}) => {
       return { ...res, hasYtdlp: ctx.media.hasYtdlp(), hasFfmpeg: !!(await ctx.media.findFfmpeg()) }
     }
     case 'search-engine': return SEARCH_ENGINES[settings.data.searchEngine] || SEARCH_ENGINES.google
+    case 'site-info': {
+      const tab = win.activeTab
+      const url = tab?.wc.getURL() || ''
+      const origin = originOf(url)
+      if (!origin) return null
+      const cookies = await tab.wc.session.cookies.get({ url }).catch(() => [])
+      return {
+        origin,
+        host: new URL(origin).hostname,
+        secure: url.startsWith('https://'),
+        cookies: cookies.length,
+        perms: ctx.permissions.siteInfo(origin),
+        passwords: passwords.list().filter((e) => e.origin === origin).length,
+      }
+    }
   }
   return null
 })
@@ -1023,6 +1170,7 @@ function showAppMenu(win, { x, y }) {
     { label: 'Lịch sử', accelerator: 'Ctrl+H', click: () => ctx.openInternal('history') },
     { label: 'Tải xuống', accelerator: 'Ctrl+J', click: () => ctx.openInternal('downloads') },
     { label: 'Dấu trang', click: () => ctx.openInternal('bookmarks') },
+    { label: 'Mật khẩu đã lưu', click: () => ctx.openInternal('passwords') },
     { label: 'Tiện ích mở rộng (Extension)', click: () => ctx.openInternal('extensions') },
     { label: 'Cửa hàng Chrome Web Store', click: () => ctx.openUrl('https://chromewebstore.google.com/') },
     { type: 'separator' },
@@ -1058,6 +1206,9 @@ function showAppMenu(win, { x, y }) {
         { label: 'Xoá dữ liệu duyệt web...', accelerator: 'Ctrl+Shift+Delete', click: () => ctx.openInternal('settings') },
         { label: 'Công cụ cho nhà phát triển', accelerator: 'F12', enabled: !!wc, click: () => wc.toggleDevTools() },
         { label: 'DevTools của giao diện trình duyệt', click: () => win.ui.webContents.openDevTools({ mode: 'detach' }) },
+        { type: 'separator' },
+        { label: 'Xuất nhật ký lỗi (log) để gửi báo lỗi…', click: () => ctx.exportLogs() },
+        { label: 'Mở thư mục nhật ký', click: () => shell.openPath(log.dir()) },
       ],
     },
     { type: 'separator' },
@@ -1090,7 +1241,7 @@ ipcMain.handle('page:invoke', async (event, name, ...args) => {
   const win = [...ctx.windows].find((w) => w.tabs.some((t) => t.wc === event.sender)) || ctx.activeWindow()
   const [a, b] = args
   switch (name) {
-    case 'getSettings': return { ...settings.data, engines: SEARCH_ENGINES, dnsProviders: DNS_PROVIDERS, version: app.getVersion(), versions: { chrome: process.versions.chrome, electron: process.versions.electron } }
+    case 'getSettings': return { ...settings.data, startup: ctx.startupMode(), engines: SEARCH_ENGINES, dnsProviders: DNS_PROVIDERS, version: app.getVersion(), versions: { chrome: process.versions.chrome, electron: process.versions.electron } }
     case 'setSetting': return ctx.setSetting(a, b)
     case 'getTopSites': return event.sender.session === ctx.session ? history.topSites(a || 12) : []
     case 'isIncognito': return event.sender.session !== ctx.session
@@ -1135,8 +1286,30 @@ ipcMain.handle('page:invoke', async (event, name, ...args) => {
     }
     case 'openOptions': return a && ctx.openUrl(a, { win })
     case 'openUrl': return ctx.openUrl(a, { win, newTab: b !== false })
+    case 'getPasswords': return { entries: passwords.list(), never: passwords.data.never, encrypted: passwords.available() }
+    case 'revealPassword': return passwords.reveal(a)
+    case 'copyPassword': {
+      const pw = passwords.reveal(a)
+      if (pw == null) return false
+      clipboard.writeText(pw)
+      // Xoá khỏi bộ nhớ tạm sau 30 giây nếu vẫn còn là mật khẩu đó.
+      setTimeout(() => clipboard.readText() === pw && clipboard.clear(), 30000)
+      return true
+    }
+    case 'deletePassword': passwords.remove(a); return true
+    case 'removeNeverSite': passwords.removeNever(a); return true
+    case 'clearPasswords': passwords.clear(); return true
+    case 'getPermissions': return ctx.permissions.list()
+    case 'setPermissionDefault': ctx.permissions.setDefault(a, b); return ctx.permissions.list()
+    case 'resetSitePermissions': ctx.permissions.resetSite(a); return ctx.permissions.list()
+    case 'getOpenPages':
+      return [...ctx.windows]
+        .filter((w) => !w.incognito)
+        .flatMap((w) => w.tabs.map((t) => ({ url: t.wc.getURL(), title: t.title })))
+        .filter((t) => /^https?:/.test(t.url))
     case 'clearBrowsingData': {
       const opts = a || {}
+      if (opts.passwords) passwords.clear()
       if (opts.history) history.clear()
       if (opts.cache) await ctx.session.clearCache()
       const storages = []
@@ -1168,6 +1341,8 @@ ipcMain.handle('page:invoke', async (event, name, ...args) => {
       return data
     }
     case 'formatBytes': return formatBytes(a)
+    case 'exportLogs': return ctx.exportLogs()
+    case 'openLogFolder': return shell.openPath(log.dir())
   }
   throw new Error(`Không rõ lệnh: ${name}`)
 })
@@ -1194,29 +1369,9 @@ function setupBrowsingSession(ses) {
     if (langs.length) ses.setSpellCheckerLanguages(langs)
   } catch {}
 
-  // Cho phép quyền thông thường (thông báo, micro, camera hỏi người dùng).
-  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-    const auto = ['fullscreen', 'clipboard-sanitized-write', 'pointerLock', 'notifications', 'mediaKeySystem', 'window-management', 'idle-detection']
-    if (auto.includes(permission)) return callback(true)
-    if (['media', 'geolocation', 'clipboard-read', 'midi', 'midiSysex', 'display-capture'].includes(permission)) {
-      const win = [...ctx.windows].find((w) => w.tabs.some((t) => t.wc === wc))
-      let origin = details.requestingUrl
-      try {
-        origin = new URL(details.requestingUrl).host
-      } catch {}
-      const names = { media: 'dùng micro/camera', geolocation: 'biết vị trí của bạn', 'clipboard-read': 'đọc bộ nhớ tạm (clipboard)', midi: 'dùng thiết bị MIDI', midiSysex: 'dùng thiết bị MIDI', 'display-capture': 'chia sẻ màn hình' }
-      const choice = dialog.showMessageBoxSync(win?.win, {
-        type: 'question',
-        buttons: ['Cho phép', 'Chặn'],
-        defaultId: 0,
-        cancelId: 1,
-        title: 'Yêu cầu quyền',
-        message: `${origin} muốn ${names[permission] || permission}.`,
-      })
-      return callback(choice === 0)
-    }
-    callback(true)
-  })
+  // Quyền trang web: quyết định theo cài đặt; "Hỏi" hiện trên thanh địa chỉ thay vì hộp thoại.
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => ctx.permissions.onRequest(wc, permission, callback, details))
+  ses.setPermissionCheckHandler((wc, permission, origin, details) => ctx.permissions.onCheck(wc, permission, origin, details))
 
   registerMetalProtocol(ses)
   ses.registerPreloadScript({ id: 'metal-page-preload', type: 'frame', filePath: PAGE_PRELOAD })
@@ -1238,6 +1393,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   const ses = session.fromPartition('persist:metal')
   ctx.session = ses
+  ctx.permissions = new Permissions(ctx)
 
   setupBrowsingSession(ses)
   app.userAgentFallback = ses.getUserAgent()
@@ -1246,6 +1402,8 @@ app.whenReady().then(async () => {
   ctx.downloads = new DownloadManager()
   ctx.media = new MediaTools(ctx.downloads, ses, path.join(VENDOR_DIR, 'bin'))
   ctx.media.attachSniffer(ses)
+  ctx.dohProxy = new DohProxy(ses)
+  ctx.media.getProxy = () => (ctx.dnsServer() ? ctx.dohProxy.start() : Promise.resolve(''))
   // Bắt được link media mới từ mạng: cập nhật nút "Tải video" của tab đó.
   ctx.media.on('found', (wcId) => {
     for (const w of ctx.windows) w.tabs.find((t) => t.id === wcId)?.scheduleMediaScan()
@@ -1322,19 +1480,18 @@ app.whenReady().then(async () => {
       minimumManifestVersion: 2,
       autoUpdate: true,
       async beforeInstall(details) {
-        const win = ctx.activeWindow()
+        const win = ctx.normalWindow()
+        if (!win) return { action: 'deny' }
         const perms = [...(details.manifest.permissions || []), ...(details.manifest.host_permissions || [])]
-        const { response } = await dialog.showMessageBox(win?.win, {
-          type: 'question',
-          icon: details.icon,
-          buttons: ['Thêm tiện ích', 'Huỷ'],
-          defaultId: 0,
-          cancelId: 1,
-          title: 'Thêm tiện ích mở rộng',
-          message: `Thêm "${details.localizedName}"?`,
-          detail: perms.length ? `Tiện ích này có thể:\n• ${perms.slice(0, 8).join('\n• ')}` : '',
+        const choice = await win.dialog({
+          icon: details.icon && !details.icon.isEmpty() ? details.icon.toDataURL() : 'info',
+          title: `Thêm "${details.localizedName}"?`,
+          message: perms.length ? 'Tiện ích này có thể:' : 'Tiện ích sẽ được thêm vào Metal Browser.',
+          list: perms.slice(0, 10),
+          buttons: [{ id: 'cancel', label: 'Huỷ' }, { id: 'ok', label: 'Thêm tiện ích', primary: true }],
         })
-        return { action: response === 0 ? 'allow' : 'deny' }
+        log.info('extension', choice === 'ok' ? 'Cài' : 'Huỷ cài', details.localizedName, details.id)
+        return { action: choice === 'ok' ? 'allow' : 'deny' }
       },
     })
   } catch (err) {
@@ -1365,9 +1522,14 @@ app.whenReady().then(async () => {
   // ---- Mở cửa sổ: khôi phục phiên trước hoặc tab mới ----
   const startUrl = urlFromArgs(process.argv)
   const saved = stores.session.data.windows || []
-  if (settings.data.restoreSession && saved.length) {
+  const mode = ctx.startupMode()
+  const pages = (settings.data.startupPages || []).filter((u) => typeof u === 'string' && u)
+  if (mode === 'restore' && saved.length) {
     saved.forEach((w) => ctx.createWindow(w))
     if (startUrl) ctx.openUrl(ctx.toUrl(startUrl))
+  } else if (mode === 'pages' && pages.length) {
+    const w = ctx.createWindow({ tabs: pages.map((url) => ({ url })) })
+    if (startUrl) ctx.openUrl(ctx.toUrl(startUrl), { win: w })
   } else {
     ctx.createWindow({ url: startUrl ? ctx.toUrl(startUrl) : ctx.homeUrl() })
   }
@@ -1422,6 +1584,26 @@ app.on('window-all-closed', () => {
 })
 
 process.on('uncaughtException', (err) => console.error('Lỗi chưa xử lý:', err))
+
+// ---- Ghi nhật ký các sự cố ----
+app.on('render-process-gone', (_e, wc, details) => log.error('renderer', 'Tiến trình trang bị dừng', details.reason, details.exitCode, wc.getURL()))
+app.on('child-process-gone', (_e, details) => {
+  if (details.reason !== 'clean-exit') log.error('process', 'Tiến trình con bị dừng', details.type, details.reason, details.exitCode)
+})
+app.on('web-contents-created', (_e, wc) => {
+  // Lỗi console của giao diện trình duyệt, trang nội bộ và extension (trang web thường quá ồn nên bỏ qua).
+  wc.on('console-message', (event) => {
+    const level = event.level
+    if (level !== 'warning' && level !== 'error') return
+    const url = wc.getURL()
+    if (!/^(file:|metal:|chrome-extension:)/.test(url)) return
+    log[level === 'error' ? 'error' : 'warn']('console', event.message, `(${(event.sourceId || url).split('/').slice(-2).join('/')}:${event.lineNumber})`)
+  })
+  wc.on('did-fail-load', (_ev, code, desc, url, isMainFrame) => {
+    if (isMainFrame && code !== -3) log.warn('load', desc, code, url)
+  })
+  wc.on('preload-error', (_ev, preloadPath, error) => log.error('preload', preloadPath, error))
+})
 process.on('unhandledRejection', (err) => {
   // Bộ chặn quảng cáo chèn script lọc vào trang mà không bắt lỗi; trang chặn script thì bỏ qua.
   if (/Script failed to execute/.test(String(err?.message))) return

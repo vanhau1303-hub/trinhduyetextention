@@ -59,7 +59,7 @@
       const b = items.find((x) => x.id === id)
       if (a.dataset.a === 'del') await api('removeBookmark', id)
       if (a.dataset.a === 'edit') {
-        const title = prompt('Tên dấu trang', b.title)
+        const title = await ask('Đổi tên dấu trang', { input: b.title, ok: 'Lưu' })
         if (title == null) return
         await api('updateBookmark', id, { title: title.trim() || b.url })
       }

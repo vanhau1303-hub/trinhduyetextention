@@ -117,6 +117,8 @@ function main() {
           return false
         }
       }
+      // Danh sách extension đóng gói có thể bớt đi: xoá bản cũ để trình duyệt thấy đúng danh sách mới.
+      fs.rmSync(path.join(INSTALL_DIR, 'resources', 'vendor', 'extensions'), { recursive: true, force: true })
       fs.cpSync(path.join(ROOT, 'dist', 'win-unpacked'), INSTALL_DIR, { recursive: true, force: true, filter: (src, dest) => !unchanged(src, dest) })
       if (wasRunning) {
         spawn(path.join(INSTALL_DIR, EXE), [], { detached: true, stdio: 'ignore' }).unref()

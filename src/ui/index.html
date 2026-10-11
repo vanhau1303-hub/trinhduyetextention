@@ -22,8 +22,9 @@
       <button id="btn-home" class="icon-btn" title="Trang chủ"></button>
 
       <div id="omnibox">
-        <span id="site-icon" title=""></span>
+        <button id="site-icon" class="site-chip" title="Thông tin và quyền của trang"></button>
         <input id="address" type="text" spellcheck="false" autocomplete="off" placeholder="Tìm kiếm hoặc nhập địa chỉ web" />
+        <div id="perm-chip" class="hidden"></div>
         <button id="btn-zoom" class="pill hidden" title="Đặt lại thu phóng"></button>
         <button id="btn-media" class="omni-btn hidden" title="Tải video / nhạc trên trang này"></button>
         <button id="btn-translate" class="omni-btn hidden" title="Dịch trang sang Tiếng Việt"></button>
@@ -53,6 +54,9 @@
   <div id="suggestions" class="popover hidden"></div>
   <div id="media-panel" class="popover hidden"></div>
   <div id="downloads-panel" class="popover hidden"></div>
+  <div id="password-panel" class="popover hidden"></div>
+  <div id="site-panel" class="popover hidden"></div>
+  <div id="dialog" class="popover dialog hidden"></div>
 
   <script src="icons.js"></script>
   <script src="ui.js"></script>

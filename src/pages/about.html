@@ -45,11 +45,25 @@
           </div>
         </div>
       </div>
+
+      <h2>Báo lỗi</h2>
+      <div class="card">
+        <div class="row">
+          <div class="grow"><div class="label">Nhật ký lỗi (log)</div><div class="desc">Gộp nhật ký 3 ngày gần nhất + thông tin phiên bản thành 1 file .txt trong thư mục Tải xuống để gửi khi báo lỗi. Không chứa mật khẩu, lịch sử hay tham số trong đường link.</div></div>
+          <button class="btn" id="open-logs">Mở thư mục log</button>
+          <button class="btn primary" id="export-logs">Xuất nhật ký</button>
+        </div>
+      </div>
     </main>
   </div>
   <script src="common.js"></script>
   <script>
     renderShell('about')
+    document.getElementById('export-logs').addEventListener('click', async () => {
+      const file = await api('exportLogs')
+      toast('Đã xuất: ' + file.split(/[\\/]/).pop())
+    })
+    document.getElementById('open-logs').addEventListener('click', () => api('openLogFolder'))
     api('getSettings').then((s) => {
       document.getElementById('ver').textContent = `Phiên bản ${s.version} · Chromium ${s.versions.chrome} · Electron ${s.versions.electron}`
     })

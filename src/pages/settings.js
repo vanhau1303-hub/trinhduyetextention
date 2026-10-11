@@ -4,6 +4,9 @@ let s = {}
 
 function fill() {
   $$('[data-key]').forEach((el) => (el.checked = !!s[el.dataset.key]))
+  for (const r of $$('input[name="startup"]')) r.checked = r.value === s.startup
+  $('#startup-pages').classList.toggle('hidden', s.startup !== 'pages')
+  renderStartupPages()
   $('#homepage').value = s.homepage === 'metal://newtab' ? '' : s.homepage || ''
   $('#searchEngine').innerHTML = Object.entries(s.engines || {})
     .map(([k, e]) => `<option value="${esc(k)}" ${k === s.searchEngine ? 'selected' : ''}>${esc(e.name)}</option>`)
@@ -46,9 +49,77 @@ $('#ffmpeg-btn').addEventListener('click', async (e) => {
 $$('[data-key]').forEach((el) =>
   el.addEventListener('change', async () => {
     await api('setSetting', el.dataset.key, el.checked)
-    if (el.dataset.restart && confirm('Cần khởi động lại trình duyệt để áp dụng. Khởi động lại ngay?')) api('restart')
+    if (el.dataset.restart && (await ask('Khởi động lại trình duyệt?', { message: 'Cần khởi động lại để áp dụng thay đổi này.', ok: 'Khởi động lại' }))) api('restart')
   })
 )
+// ---- Quyền của trang web ----
+const PERM_LABEL = { ask: 'Hỏi', allow: 'Cho phép', block: 'Chặn' }
+async function renderPermissions(data) {
+  data = data || (await api('getPermissions'))
+  const labels = Object.fromEntries(data.perms.map((p) => [p.key, p.label]))
+  $('#perm-defaults').innerHTML = data.perms
+    .map((p) => `<div class="perm"><span class="pl">${esc(p.label)}</span><select data-perm="${esc(p.key)}">${['ask', 'allow', 'block']
+      .map((v) => `<option value="${v}" ${p.value === v ? 'selected' : ''}>${PERM_LABEL[v]}</option>`)
+      .join('')}</select></div>`)
+    .join('')
+  $('#perm-sites').innerHTML = data.sites.length
+    ? data.sites
+        .map((site) => `<div class="perm"><img class="fav" src="${esc(faviconFor(site.origin))}" alt=""><span class="ellipsis" style="width:220px">${esc(new URL(site.origin).hostname)}</span>
+          <span class="chips">${Object.entries(site.perms).map(([k, v]) => `<span class="${v}">${esc(labels[k] || k)}: ${PERM_LABEL[v] || v}</span>`).join('')}</span>
+          <button class="icon-btn" data-reset="${esc(site.origin)}" title="Đặt lại quyền của trang này">✕</button></div>`)
+        .join('')
+    : '<div class="perm muted">Chưa có trang nào.</div>'
+  $$('#perm-sites img').forEach((img) => (img.onerror = () => (img.style.visibility = 'hidden')))
+}
+$('#perm-defaults').addEventListener('change', async (e) => {
+  const sel = e.target.closest('[data-perm]')
+  if (sel) renderPermissions(await api('setPermissionDefault', sel.dataset.perm, sel.value))
+})
+$('#perm-sites').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-reset]')
+  if (b) renderPermissions(await api('resetSitePermissions', b.dataset.reset))
+})
+renderPermissions()
+
+// ---- Khi khởi động ----
+function renderStartupPages() {
+  const pages = s.startupPages || []
+  $('#startup-list').innerHTML = pages.length
+    ? pages.map((u, i) => `<div class="sp"><img class="fav" src="${esc(faviconFor(u))}" alt=""><div class="grow ellipsis" title="${esc(u)}">${esc(u)}</div><button class="icon-btn" data-del="${i}" title="Xoá">✕</button></div>`).join('')
+    : '<div class="sp muted">Chưa có trang nào — thêm trang hoặc bấm "Dùng các trang đang mở".</div>'
+  $$('#startup-list img').forEach((img) => (img.onerror = () => (img.style.visibility = 'hidden')))
+}
+async function saveStartupPages(pages) {
+  s.startupPages = pages
+  await api('setSetting', 'startupPages', pages)
+  renderStartupPages()
+}
+$$('input[name="startup"]').forEach((r) =>
+  r.addEventListener('change', () => {
+    s.startup = r.value
+    $('#startup-pages').classList.toggle('hidden', s.startup !== 'pages')
+    api('setSetting', 'startup', r.value)
+  })
+)
+$('#startup-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-del]')
+  if (b) saveStartupPages((s.startupPages || []).filter((_, i) => i !== Number(b.dataset.del)))
+})
+$('#startup-add').addEventListener('submit', (e) => {
+  e.preventDefault()
+  let v = $('#startup-url').value.trim()
+  if (!v) return
+  if (!/^[a-z-]+:/i.test(v)) v = `https://${v}`
+  $('#startup-url').value = ''
+  saveStartupPages([...(s.startupPages || []), v])
+})
+$('#startup-current').addEventListener('click', async () => {
+  const open = await api('getOpenPages')
+  if (!open.length) return toast('Không có trang web nào đang mở')
+  await saveStartupPages([...new Set(open.map((p) => p.url))])
+  toast(`Đã dùng ${open.length} trang đang mở`)
+})
+
 $('#homepage').addEventListener('change', (e) => {
   let v = e.target.value.trim()
   if (v && !/^[a-z-]+:/i.test(v)) v = `https://${v}`
@@ -96,9 +167,10 @@ $('#clear').addEventListener('click', async () => {
     cache: $('#c-cache').checked,
     cookies: $('#c-cookies').checked,
     downloads: $('#c-downloads').checked,
+    passwords: $('#c-passwords').checked,
   }
   if (!Object.values(opts).some(Boolean)) return toast('Chưa chọn mục nào')
-  if (!confirm('Xoá dữ liệu đã chọn? Không thể hoàn tác.')) return
+  if (!(await ask('Xoá dữ liệu đã chọn?', { message: 'Không thể hoàn tác.', ok: 'Xoá dữ liệu', danger: true }))) return
   await api('clearBrowsingData', opts)
   toast('Đã xoá dữ liệu duyệt web')
 })

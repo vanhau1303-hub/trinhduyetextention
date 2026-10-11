@@ -13,8 +13,10 @@ Trình duyệt nền Chromium (Electron 44 / Chromium 152) chạy được **ext
 | Dịch | Bôi đen → chuột phải → **"Dịch sang Tiếng Việt"** hiện bong bóng dịch ngay trên trang (có nút Đọc, Sao chép); nút **Dịch trang** trên thanh địa chỉ |
 | Chặn quảng cáo | Tích hợp sẵn (EasyList + EasyPrivacy, bộ lọc Ghostery), bật/tắt bằng nút khiên, hiện số yêu cầu đã chặn |
 | Giao diện | Tab kéo-thả, ghim tab, tắt tiếng tab, thanh dấu trang, chủ đề sáng/tối theo Windows, ép trang web sang chế độ tối, trang Tab mới có đồng hồ + ô truy cập nhanh + hình nền tuỳ chọn |
+| Mật khẩu | Hỏi lưu khi đăng nhập, tự điền lần sau; mã hoá bằng tài khoản Windows (DPAPI), chỉ lưu trên máy; quản lý ở metal://passwords |
+| Khởi động | Mở Tab mới / tiếp tục từ chỗ đã dừng / mở tập hợp trang cụ thể (có nút "Dùng các trang đang mở") |
 | Ẩn danh | Ctrl+Shift+N — không lưu lịch sử/cookie, xoá sạch khi đóng cửa sổ ẩn danh cuối cùng |
-| Có sẵn khi cài | Dark Reader, Google Translate, Google Docs Offline, Synology Image Assistant + yt-dlp, ffmpeg — không cần tải thêm (danh sách ở `build/bundled-extensions.json`) |
+| Có sẵn khi cài | Google Translate + yt-dlp, ffmpeg — không cần tải thêm (danh sách ở `build/bundled-extensions.json`) |
 | Khác | Khôi phục phiên làm việc, gợi ý tìm kiếm trên thanh địa chỉ, tìm trong trang, thu phóng, quản lý tải xuống, lịch sử, kiểm tra chính tả tiếng Việt, hỏi quyền micro/camera/vị trí, phím tắt giống Chrome |
 
 ## Cài đặt & chạy

@@ -71,7 +71,7 @@
       load()
     })
     $('#clear').addEventListener('click', async () => {
-      if (!confirm('Xoá toàn bộ lịch sử duyệt web?')) return
+      if (!(await ask('Xoá toàn bộ lịch sử duyệt web?', { ok: 'Xoá', danger: true }))) return
       await api('clearHistory')
       load()
     })

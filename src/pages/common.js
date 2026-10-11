@@ -12,6 +12,43 @@ function toast(msg, ms = 2600) {
   setTimeout(() => el.remove(), ms)
 }
 
+// Hộp thoại cùng kiểu với trình duyệt, thay cho confirm()/prompt() mặc định.
+// ask('Xoá?', { ok: 'Xoá', danger: true }) -> Promise<boolean>
+// ask('Tên mới', { input: 'giá trị cũ' })  -> Promise<string|null>
+function ask(title, { message = '', ok = 'OK', cancel = 'Huỷ', danger = false, input = null } = {}) {
+  return new Promise((resolve) => {
+    const back = document.createElement('div')
+    back.className = 'm-backdrop'
+    back.innerHTML = `<div class="m-box" role="dialog"><div class="m-title"></div><div class="m-msg"></div>
+      ${input != null ? '<input type="text">' : ''}
+      <div class="m-buttons"><button class="btn" data-r="0"></button><button class="btn ${danger ? 'danger solid' : 'primary'}" data-r="1"></button></div></div>`
+    back.querySelector('.m-title').textContent = title
+    back.querySelector('.m-msg').textContent = message
+    back.querySelector('[data-r="0"]').textContent = cancel
+    back.querySelector('[data-r="1"]').textContent = ok
+    const field = back.querySelector('input')
+    if (field) field.value = input
+    const done = (yes) => {
+      back.remove()
+      document.removeEventListener('keydown', onKey, true)
+      resolve(input != null ? (yes ? field.value : null) : yes)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') done(false)
+      if (e.key === 'Enter') done(true)
+    }
+    back.addEventListener('click', (e) => {
+      if (e.target === back) done(false)
+      const b = e.target.closest('[data-r]')
+      if (b) done(b.dataset.r === '1')
+    })
+    document.addEventListener('keydown', onKey, true)
+    document.body.appendChild(back)
+    ;(field || back.querySelector('[data-r="1"]')).focus()
+    field?.select()
+  })
+}
+
 function formatBytes(n) {
   if (!Number.isFinite(n) || n <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -34,6 +71,7 @@ const NAV = [
   ['history', 'Lịch sử', '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 3"/>'],
   ['downloads', 'Tải xuống', '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>'],
   ['bookmarks', 'Dấu trang', '<path d="M6 3h12v18l-6-4-6 4z"/>'],
+  ['passwords', 'Mật khẩu', '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.5"/>'],
   ['about', 'Giới thiệu', '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'],
 ]
 
