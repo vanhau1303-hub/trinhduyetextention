@@ -100,6 +100,14 @@ $('#bg-clear').addEventListener('click', async () => {
   tick()
   setInterval(tick, 1000)
   settings = await api('getSettings')
+  if (await api('isIncognito')) {
+    document.body.classList.add('incognito')
+    document.title = 'Tab ẩn danh mới'
+    $('#incognito-note').classList.remove('hidden')
+    $('#tiles').classList.add('hidden')
+    $('.corner').classList.add('hidden')
+    settings.newtabBackground = ''
+  }
   const engine = settings.engines?.[settings.searchEngine]
   $('#version').textContent = `Metal Browser v${settings.version}`
   $('#engine').textContent = engine ? `Tìm kiếm bằng ${engine.name}` : ''

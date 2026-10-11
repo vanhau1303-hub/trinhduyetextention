@@ -17,6 +17,7 @@ const STAMP = path.join(ROOT, 'dist', '.install-stamp')
 const LOCK = path.join(ROOT, 'dist', '.install-lock')
 const LOG = path.join(ROOT, 'dist', 'install-local.log')
 const INPUTS = ['src', 'build', 'package.json', 'package-lock.json']
+const VENDOR_MARK = path.join(ROOT, 'vendor', 'bin', 'ffmpeg.exe')
 
 fs.mkdirSync(path.join(ROOT, 'dist'), { recursive: true })
 
@@ -86,6 +87,12 @@ function main() {
 
   try {
     const started = Date.now()
+    // Extension + yt-dlp + ffmpeg đóng gói sẵn: tải về một lần (lần sau dùng lại).
+    if (!fs.existsSync(VENDOR_MARK) || !fs.existsSync(path.join(ROOT, 'vendor', 'extensions'))) {
+      log('Chuẩn bị extension + công cụ đóng gói sẵn…')
+      const electron = require(path.join(ROOT, 'node_modules', 'electron'))
+      execFileSync(electron, [path.join(ROOT, 'scripts', 'fetch-vendor.js')], { cwd: ROOT, stdio: ['ignore', fs.openSync(LOG, 'a'), fs.openSync(LOG, 'a')], windowsHide: true })
+    }
     if (!installed) {
       log('Chưa cài: build bộ cài NSIS…')
       builder('nsis')
@@ -96,7 +103,21 @@ function main() {
       log('Mã nguồn đã đổi: build bản mới…')
       builder('dir')
       const wasRunning = closeBrowser()
-      fs.cpSync(path.join(ROOT, 'dist', 'win-unpacked'), INSTALL_DIR, { recursive: true, force: true })
+      // Bỏ qua file y hệt (cùng kích thước, không mới hơn) để khỏi chép lại ~350 MB công cụ mỗi lần.
+      const unchanged = (src, dest) => {
+        try {
+          const a = fs.statSync(src)
+          if (a.isDirectory()) return false
+          const b = fs.statSync(dest)
+          // electron-builder ghi lại mọi file mỗi lần build nên mtime luôn mới; với công cụ đóng gói
+          // (resources/vendor) chỉ so kích thước.
+          if (src.includes(`${path.sep}resources${path.sep}vendor${path.sep}`)) return a.size === b.size
+          return a.size === b.size && a.mtimeMs <= b.mtimeMs
+        } catch {
+          return false
+        }
+      }
+      fs.cpSync(path.join(ROOT, 'dist', 'win-unpacked'), INSTALL_DIR, { recursive: true, force: true, filter: (src, dest) => !unchanged(src, dest) })
       if (wasRunning) {
         spawn(path.join(INSTALL_DIR, EXE), [], { detached: true, stdio: 'ignore' }).unref()
         log('Đã mở lại trình duyệt.')

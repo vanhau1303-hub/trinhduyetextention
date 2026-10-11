@@ -69,12 +69,15 @@ const FRAME_SCRIPT = `(() => {
 })()`
 
 class MediaTools extends EventEmitter {
-  constructor(downloads, session) {
+  // bundledBin: thư mục công cụ đóng gói sẵn trong bộ cài (yt-dlp, ffmpeg, ffprobe).
+  constructor(downloads, session, bundledBin = '') {
     super()
     this.downloads = downloads
     this.session = session
     this.binDir = path.join(app.getPath('userData'), 'bin')
-    this.ytdlpPath = path.join(this.binDir, 'yt-dlp.exe')
+    this.bundledBin = bundledBin
+    // Bản trong userData (tự cập nhật được) ưu tiên hơn bản đóng gói sẵn.
+    this.userYtdlp = path.join(this.binDir, 'yt-dlp.exe')
     this.installing = {}
     this.ffmpeg = undefined
     this.sniffed = new Map() // webContentsId -> Map(url -> item)
@@ -82,8 +85,8 @@ class MediaTools extends EventEmitter {
 
   // Nghe phản hồi mạng để bắt link media mà trang tải bằng JS (HLS của JW Player, link không có đuôi...).
   // Dùng onResponseStarted vì bộ chặn quảng cáo đã chiếm onBeforeRequest/onHeadersReceived.
-  attachSniffer() {
-    this.session.webRequest.onResponseStarted({ urls: ['http://*/*', 'https://*/*'] }, (d) => {
+  attachSniffer(ses = this.session) {
+    ses.webRequest.onResponseStarted({ urls: ['http://*/*', 'https://*/*'] }, (d) => {
       if (!d.webContentsId || d.statusCode >= 400 || IGNORE_RE.test(d.url)) return
       const headers = d.responseHeaders || {}
       const header = (name) => {
@@ -176,7 +179,13 @@ class MediaTools extends EventEmitter {
       webContents.downloadURL(item.url, { headers: { Referer: referer } })
       return null
     }
-    return this.downloadWithYtdlp(item.url, webContents.getTitle(), quality, { referer, cookieUrls: [pageUrl, item.url] })
+    return this.downloadWithYtdlp(item.url, webContents.getTitle(), quality, { referer, cookieUrls: [pageUrl, item.url], session: webContents.session })
+  }
+
+  get ytdlpPath() {
+    if (fs.existsSync(this.userYtdlp)) return this.userYtdlp
+    const bundled = this.bundledBin && path.join(this.bundledBin, 'yt-dlp.exe')
+    return bundled && fs.existsSync(bundled) ? bundled : this.userYtdlp
   }
 
   hasYtdlp() {
@@ -187,6 +196,8 @@ class MediaTools extends EventEmitter {
     if (this.ffmpeg) return this.ffmpeg
     const local = path.join(this.binDir, 'ffmpeg.exe')
     if (fs.existsSync(local)) return (this.ffmpeg = local)
+    const bundled = this.bundledBin && path.join(this.bundledBin, 'ffmpeg.exe')
+    if (bundled && fs.existsSync(bundled)) return (this.ffmpeg = bundled)
     this.ffmpeg = await new Promise((resolve) => {
       execFile('where', ['ffmpeg'], { windowsHide: true }, (err, stdout) => {
         resolve(err ? null : stdout.split(/\r?\n/)[0].trim() || null)
@@ -241,7 +252,7 @@ class MediaTools extends EventEmitter {
 
   // yt-dlp.exe bản chính thức từ GitHub.
   installYtdlp() {
-    return this.fetchTool('ytdlp', YTDLP_URL, this.ytdlpPath, 'yt-dlp.exe (công cụ tải video)')
+    return this.fetchTool('ytdlp', YTDLP_URL, this.userYtdlp, 'yt-dlp.exe (công cụ tải video)')
   }
 
   // ffmpeg (bản dựng của dự án yt-dlp) để ghép hình + tiếng của YouTube và đổi sang MP3.
@@ -266,13 +277,18 @@ class MediaTools extends EventEmitter {
 
   async updateYtdlp() {
     if (!this.hasYtdlp()) return this.installYtdlp()
+    // Bản đóng gói nằm trong thư mục cài: chép ra userData rồi mới tự cập nhật.
+    if (!fs.existsSync(this.userYtdlp)) {
+      fs.mkdirSync(this.binDir, { recursive: true })
+      fs.copyFileSync(this.ytdlpPath, this.userYtdlp)
+    }
     return new Promise((resolve) => {
-      execFile(this.ytdlpPath, ['-U'], { windowsHide: true }, () => resolve(true))
+      execFile(this.userYtdlp, ['-U'], { windowsHide: true }, () => resolve(true))
     })
   }
 
   // Xuất cookie của trang (định dạng Netscape) để yt-dlp tải được video cần đăng nhập.
-  async writeCookies(urls) {
+  async writeCookies(urls, ses = this.session) {
     const bases = new Set()
     for (const u of [].concat(urls)) {
       try {
@@ -282,7 +298,7 @@ class MediaTools extends EventEmitter {
     const cookies = []
     const seen = new Set()
     for (const base of bases) {
-      for (const c of await this.session.cookies.get({ domain: base })) {
+      for (const c of await ses.cookies.get({ domain: base })) {
         const key = `${c.domain}|${c.path}|${c.name}`
         if (!seen.has(key)) seen.add(key), cookies.push(c)
       }
@@ -377,7 +393,8 @@ class MediaTools extends EventEmitter {
       args.push('--concurrent-fragments', '4')
       if (ffmpeg && quality !== 'audio') args.push('--remux-video', 'mp4')
     }
-    const cookieFile = await this.writeCookies(opts.cookieUrls || [target]).catch(() => null)
+    // Cửa sổ ẩn danh: lấy cookie của phiên ẩn danh, không phải của hồ sơ chính.
+    const cookieFile = await this.writeCookies(opts.cookieUrls || [target], opts.session).catch(() => null)
     if (cookieFile) args.push('--cookies', cookieFile)
     args.push(target)
 

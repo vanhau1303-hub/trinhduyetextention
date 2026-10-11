@@ -3,6 +3,21 @@ const $ = (sel) => document.querySelector(sel)
 const I = window.ICONS
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 
+// Cửa sổ ẩn danh được mở với ?incognito=1.
+const INCOGNITO = new URLSearchParams(location.search).has('incognito')
+if (INCOGNITO) {
+  document.body.classList.add('incognito', 'dark')
+  const badge = document.getElementById('incognito-badge')
+  badge.classList.remove('hidden')
+  badge.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11h18"/><path d="M5 11l2-6h10l2 6"/><circle cx="7" cy="16" r="3"/><circle cx="17" cy="16" r="3"/><path d="M10 16h4"/></svg><span>Ẩn danh</span>'
+} else {
+  // Nút của extension chỉ có ở cửa sổ thường (extension không chạy trong phiên ẩn danh).
+  const list = document.createElement('browser-action-list')
+  list.id = 'actions'
+  list.setAttribute('alignment', 'bottom left')
+  document.getElementById('actions-slot').replaceWith(list)
+}
+
 let state = { tabs: [], activeId: null, bookmarks: [], downloads: { active: 0, recent: [] } }
 const tabEls = new Map()
 
@@ -176,7 +191,7 @@ function renderToolbar() {
   dl.title = d.active ? `Đang tải ${d.active} mục...` : 'Tải xuống (Ctrl+J)'
 
   const actions = $('#actions')
-  if (state.activeId != null && actions.getAttribute('tab') !== String(state.activeId)) actions.setAttribute('tab', String(state.activeId))
+  if (actions && state.activeId != null && actions.getAttribute('tab') !== String(state.activeId)) actions.setAttribute('tab', String(state.activeId))
 }
 
 $('#btn-back').addEventListener('click', () => ui.send('back'))
@@ -504,7 +519,7 @@ ui.on('find-result', (r) => {
 let lastActiveId = null
 ui.on('state', (s) => {
   state = s
-  document.body.classList.toggle('dark', !!s.dark)
+  document.body.classList.toggle('dark', !!s.dark || INCOGNITO)
   if (s.activeId !== lastActiveId) {
     lastActiveId = s.activeId
     if (!findbar.classList.contains('hidden')) closeFind()

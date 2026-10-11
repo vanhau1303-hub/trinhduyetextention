@@ -60,6 +60,10 @@
     .tile .x:hover { background: var(--hover); color: var(--text); }
     .version { position: fixed; left: 16px; bottom: 16px; font-size: 12px; color: var(--dim); text-decoration: none !important; }
     .version:hover { color: var(--accent); }
+    body.incognito { --bg: #1e1b26; --card: #2c2838; --text: #ece7f7; --dim: #b3aac6; --border: #3d3750; --accent: #b69cff; }
+    body.incognito #q { color: var(--text); }
+    .incognito-note { margin-top: 40px; max-width: 620px; color: var(--dim); font-size: 14px; line-height: 1.6; }
+    .incognito-note .inc-title { font-size: 20px; color: var(--text); font-weight: 600; margin-bottom: 8px; }
     .corner { position: fixed; right: 16px; bottom: 16px; display: flex; gap: 8px; }
     .corner button { height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; font-size: 12.5px; }
     .corner button:hover { border-color: var(--accent); }
@@ -75,6 +79,11 @@
     </form>
     <div class="engine" id="engine"></div>
     <div class="tiles" id="tiles"></div>
+    <div class="incognito-note hidden" id="incognito-note">
+      <div class="inc-title">Bạn đang duyệt ẩn danh</div>
+      <p>Metal Browser <b>không lưu</b> lịch sử duyệt web, cookie và dữ liệu trang của cửa sổ này. Tất cả bị xoá khi bạn đóng hết cửa sổ ẩn danh.</p>
+      <p>Dấu trang và file tải về vẫn được giữ lại. Extension không chạy trong chế độ ẩn danh. Nhà mạng, nơi làm việc và trang web vẫn có thể thấy bạn truy cập trang nào.</p>
+    </div>
   </div>
   <a class="version" id="version" href="metal://about/" title="Giới thiệu Metal Browser"></a>
   <div class="corner">

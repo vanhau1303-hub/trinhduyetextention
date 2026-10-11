@@ -53,6 +53,7 @@ const DEFAULT_SETTINGS = {
   // DNS-over-HTTPS để tránh bị nhà mạng chặn web qua DNS: off | cloudflare | google | quad9 | adguard | custom
   secureDns: 'cloudflare',
   secureDnsCustom: '',
+  removedBundled: [], // extension đóng gói sẵn mà người dùng đã gỡ
 }
 
 const DNS_PROVIDERS = {

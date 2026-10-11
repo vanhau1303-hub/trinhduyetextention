@@ -42,6 +42,9 @@ const { MediaTools } = require('./media')
 const PAGES_DIR = path.join(__dirname, 'pages')
 const PAGE_PRELOAD = path.join(__dirname, 'preload', 'page-preload.js')
 const EXTENSIONS_DIR = path.join(app.getPath('userData'), 'Extensions')
+// Extension + công cụ đóng gói sẵn trong bộ cài (xem scripts/fetch-vendor.js).
+const VENDOR_DIR = app.isPackaged ? path.join(process.resourcesPath, 'vendor') : path.join(__dirname, '..', 'vendor')
+const BUNDLED_EXT_DIR = path.join(VENDOR_DIR, 'extensions')
 const INTERNAL_PAGES = ['newtab', 'settings', 'extensions', 'history', 'downloads', 'bookmarks', 'error', 'about']
 
 // ---------------------------------------------------------------------------
@@ -169,7 +172,9 @@ const ctx = {
   quitting: false,
   sessionTimer: null,
 
-  newTabUrl() {
+  newTabUrl(win) {
+    // Trang tab mới của extension không chạy được trong phiên ẩn danh.
+    if (win?.incognito) return 'metal://newtab/'
     const override = this.extensions?.getURLOverrides?.().newtab
     return override || 'metal://newtab/'
   },
@@ -194,6 +199,27 @@ const ctx = {
     return this.byBaseWindow.get(focused) || this.lastFocused || [...this.windows][0]
   },
 
+  // Cửa sổ thường đang dùng (bỏ qua cửa sổ ẩn danh): nơi mở link từ extension / ứng dụng khác.
+  normalWindow() {
+    const a = this.activeWindow()
+    if (a && !a.incognito) return a
+    return [...this.windows].find((w) => !w.incognito) || null
+  },
+
+  // Phiên ẩn danh: chỉ nằm trong bộ nhớ (partition không có "persist:"), dùng chung cho mọi cửa sổ
+  // ẩn danh đang mở và bị xoá sạch khi đóng cửa sổ ẩn danh cuối cùng. Extension không chạy ở đây.
+  incognitoSession() {
+    if (!this.incSes) {
+      const ses = session.fromPartition(`metal-incognito-${Date.now()}`)
+      setupBrowsingSession(ses)
+      ses.on('will-download', (_e, item) => this.downloads.handleWillDownload(item))
+      this.media.attachSniffer(ses)
+      this.incSes = ses
+      this.applyAdblock()
+    }
+    return this.incSes
+  },
+
   createWindow(opts = {}) {
     const w = new BrowserWin(this, opts)
     this.windows.add(w)
@@ -202,7 +228,7 @@ const ctx = {
     if (opts.tabs?.length) {
       opts.tabs.forEach((t, i) => w.createTab({ url: t.url, pinned: t.pinned, active: i === (opts.active || 0) }))
     } else if (!opts.empty) {
-      w.createTab({ url: opts.url || this.newTabUrl() })
+      w.createTab({ url: opts.url || this.newTabUrl(w) })
     }
     return w
   },
@@ -221,6 +247,14 @@ const ctx = {
     this.byBaseWindow.delete(w.win)
     if (this.lastFocused === w) this.lastFocused = [...this.windows][0] || null
     if (this.windows.size > 0) this.scheduleSessionSave()
+    // Đóng cửa sổ ẩn danh cuối cùng: xoá cookie, cache, dữ liệu trang của phiên ẩn danh.
+    if (w.incognito && this.incSes && ![...this.windows].some((x) => x.incognito)) {
+      const ses = this.incSes
+      this.incSes = null
+      ses.clearStorageData().catch(() => {})
+      ses.clearCache().catch(() => {})
+      ses.clearAuthCache().catch(() => {})
+    }
   },
 
   scheduleSessionSave() {
@@ -230,7 +264,7 @@ const ctx = {
   },
 
   saveSession() {
-    const windows = [...this.windows].filter((w) => !w.win.isDestroyed()).map((w) => w.serialize()).filter((w) => w.tabs.length)
+    const windows = [...this.windows].filter((w) => !w.win.isDestroyed() && !w.incognito).map((w) => w.serialize()).filter((w) => w.tabs.length)
     if (!windows.length) return
     stores.session.data = { windows, time: Date.now() }
     stores.session.save()
@@ -243,8 +277,9 @@ const ctx = {
 
   moveTabToNewWindow(tab) {
     const url = tab.wc.getURL()
+    const incognito = tab.win.incognito
     tab.win.closeTab(tab)
-    this.createWindow({ url })
+    this.createWindow({ url, incognito })
   },
 
   openUrl(url, { newTab = true, win, background = false } = {}) {
@@ -299,14 +334,14 @@ const ctx = {
         case 'r': return run(() => wc?.reloadIgnoringCache())
         case 'b': return run(() => this.setSetting('showBookmarksBar', !settings.data.showBookmarksBar))
         case 'delete': case 'Delete': return run(() => this.openInternal('settings'))
-        case 'n': return false
+        case 'n': return run(() => this.createWindow({ incognito: true }))
       }
     }
     if (ctrl && !input.alt) {
       if (/^[1-8]$/.test(key)) return run(() => win.selectTab(win.tabs[Number(key) - 1]))
       switch (key) {
         case '9': return run(() => win.selectTab(win.tabs[win.tabs.length - 1]))
-        case 't': return run(() => win.createTab({ url: this.newTabUrl() }))
+        case 't': return run(() => win.createTab({ url: this.newTabUrl(win) }))
         case 'n': return run(() => this.createWindow())
         case 'w': case 'F4': return run(() => win.closeTab(tab))
         case 'Tab': return run(() => win.cycleTab(input.shift ? -1 : 1))
@@ -353,7 +388,7 @@ const ctx = {
 
   homeUrl() {
     const h = settings.data.homepage
-    return !h || h === 'metal://newtab' ? this.newTabUrl() : h
+    return !h || h === 'metal://newtab' ? this.newTabUrl(this.activeWindow()) : h
   },
 
   zoom(win, dir) {
@@ -416,7 +451,8 @@ const ctx = {
 
     if (params.linkURL) {
       add({ label: 'Mở liên kết trong tab mới', click: () => win.createTab({ url: params.linkURL, active: false, afterTab: tab }) })
-      add({ label: 'Mở liên kết trong cửa sổ mới', click: () => this.createWindow({ url: params.linkURL }) })
+      add({ label: 'Mở liên kết trong cửa sổ mới', click: () => this.createWindow({ url: params.linkURL, incognito: win.incognito }) })
+      if (!win.incognito) add({ label: 'Mở liên kết trong cửa sổ ẩn danh', click: () => this.createWindow({ url: params.linkURL, incognito: true }) })
       sep()
       add({ label: 'Lưu liên kết thành...', click: () => wc.downloadURL(params.linkURL) })
       add({ label: 'Sao chép địa chỉ liên kết', click: () => clipboard.writeText(params.linkURL) })
@@ -480,7 +516,7 @@ const ctx = {
       sep()
     }
 
-    const extItems = this.extensions.getContextMenuItems(wc, params)
+    const extItems = win.incognito ? [] : this.extensions.getContextMenuItems(wc, params)
     if (extItems.length) {
       extItems.forEach((item) => menu.append(item))
       sep()
@@ -511,7 +547,7 @@ const ctx = {
     const stream = res.items.find((m) => m.stream)
     const task = stream && !this.media.isYtdlpSite(tab.wc.getURL())
       ? this.media.downloadItem(tab.wc, stream, quality)
-      : this.media.downloadWithYtdlp(tab.wc.getURL(), tab.wc.getTitle(), quality)
+      : this.media.downloadWithYtdlp(tab.wc.getURL(), tab.wc.getTitle(), quality, { session: tab.wc.session })
     return task.catch(showError)
   },
 
@@ -596,9 +632,9 @@ const ctx = {
 
   // ---- Chặn quảng cáo ----
   async applyAdblock() {
-    const ses = this.session
+    const sessions = [this.session, this.incSes].filter(Boolean)
     if (!settings.data.adblock) {
-      if (this.blocker?.isBlockingEnabled(ses)) this.blocker.disableBlockingInSession(ses)
+      for (const ses of sessions) if (this.blocker?.isBlockingEnabled(ses)) this.blocker.disableBlockingInSession(ses)
       return
     }
     try {
@@ -621,7 +657,7 @@ const ctx = {
         })
         this.blocker = blocker
       }
-      if (!this.blocker.isBlockingEnabled(ses)) this.blocker.enableBlockingInSession(ses)
+      for (const ses of sessions) if (!this.blocker.isBlockingEnabled(ses)) this.blocker.enableBlockingInSession(ses)
     } catch (err) {
       console.error('Không bật được chặn quảng cáo:', err)
     }
@@ -716,7 +752,29 @@ const extMgr = {
     settings.save()
   },
 
+  isBundled(id) {
+    return fs.existsSync(path.join(BUNDLED_EXT_DIR, id))
+  },
+
+  // Chép extension đóng gói sẵn vào hồ sơ nếu chưa có (lần chạy đầu, hoặc bản cài mới thêm extension).
+  // Người dùng đã gỡ thì không cài lại. Sau đó Chrome Web Store tự cập nhật như extension bình thường.
+  installBundled() {
+    if (!fs.existsSync(BUNDLED_EXT_DIR)) return
+    const removed = new Set(settings.data.removedBundled || [])
+    for (const id of fs.readdirSync(BUNDLED_EXT_DIR)) {
+      if (removed.has(id) || fs.existsSync(path.join(EXTENSIONS_DIR, id))) continue
+      try {
+        fs.cpSync(path.join(BUNDLED_EXT_DIR, id), path.join(EXTENSIONS_DIR, id), { recursive: true })
+      } catch (err) {
+        console.error('Không cài được extension đóng gói sẵn', id, err.message)
+      }
+    }
+  },
+
   async remove(id) {
+    if (this.isBundled(id)) {
+      settings.data.removedBundled = [...new Set([...(settings.data.removedBundled || []), id])]
+    }
     const p = this.findPath(id)
     const unpacked = settings.data.unpackedExtensions.find((u) => u.id === id || u.path === p)
     settings.data.disabledExtensions = settings.data.disabledExtensions.filter((d) => d.id !== id)
@@ -869,7 +927,7 @@ ipcMain.on('ui:action', (event, type, p = {}) => {
   const tab = p.tabId != null ? win.getTab(p.tabId) : win.activeTab
   const wc = tab?.wc
   switch (type) {
-    case 'new-tab': return win.createTab({ url: ctx.newTabUrl() })
+    case 'new-tab': return win.createTab({ url: ctx.newTabUrl(win) })
     case 'select-tab': return win.selectTab(tab)
     case 'close-tab': return win.closeTab(tab)
     case 'move-tab': return tab && win.moveTab(tab, p.index)
@@ -913,7 +971,7 @@ ipcMain.on('ui:action', (event, type, p = {}) => {
       // Mục trong bảng tải video (theo lần quét gần nhất của cửa sổ này).
       const item = typeof p.index === 'number' ? win.lastMediaScan?.items?.[p.index] : null
       if (item) return ctx.media.downloadItem(wc, item, p.quality || 'best').catch(showError)
-      return ctx.media.downloadWithYtdlp(wc.getURL(), wc.getTitle(), p.quality || 'best').catch(showError)
+      return ctx.media.downloadWithYtdlp(wc.getURL(), wc.getTitle(), p.quality || 'best', { session: wc.session }).catch(showError)
     }
     case 'open-downloads': return ctx.openInternal('downloads')
     case 'open-download': return ctx.downloads.open(p.id)
@@ -958,8 +1016,9 @@ function showAppMenu(win, { x, y }) {
   Menu.buildFromTemplate([
     { label: `Metal Browser — phiên bản ${app.getVersion()}`, click: () => ctx.openInternal('about') },
     { type: 'separator' },
-    { label: 'Tab mới', accelerator: 'Ctrl+T', click: () => win.createTab({ url: ctx.newTabUrl() }) },
+    { label: 'Tab mới', accelerator: 'Ctrl+T', click: () => win.createTab({ url: ctx.newTabUrl(win) }) },
     { label: 'Cửa sổ mới', accelerator: 'Ctrl+N', click: () => ctx.createWindow() },
+    { label: 'Cửa sổ ẩn danh mới', accelerator: 'Ctrl+Shift+N', click: () => ctx.createWindow({ incognito: true }) },
     { type: 'separator' },
     { label: 'Lịch sử', accelerator: 'Ctrl+H', click: () => ctx.openInternal('history') },
     { label: 'Tải xuống', accelerator: 'Ctrl+J', click: () => ctx.openInternal('downloads') },
@@ -1033,7 +1092,8 @@ ipcMain.handle('page:invoke', async (event, name, ...args) => {
   switch (name) {
     case 'getSettings': return { ...settings.data, engines: SEARCH_ENGINES, dnsProviders: DNS_PROVIDERS, version: app.getVersion(), versions: { chrome: process.versions.chrome, electron: process.versions.electron } }
     case 'setSetting': return ctx.setSetting(a, b)
-    case 'getTopSites': return history.topSites(a || 12)
+    case 'getTopSites': return event.sender.session === ctx.session ? history.topSites(a || 12) : []
+    case 'isIncognito': return event.sender.session !== ctx.session
     case 'getHistory': return history.search(a, b || 300)
     case 'removeHistory': return history.remove(a)
     case 'clearHistory': return history.clear(a)
@@ -1059,6 +1119,7 @@ ipcMain.handle('page:invoke', async (event, name, ...args) => {
     case 'installById': {
       const id = String(a || '').match(/[a-p]{32}/)?.[0]
       if (!id) throw new Error('Không tìm thấy ID extension hợp lệ (32 ký tự a–p).')
+      settings.data.removedBundled = (settings.data.removedBundled || []).filter((x) => x !== id)
       await installExtension(id, { session: ctx.session, extensionsPath: EXTENSIONS_DIR, loadExtensionOptions: { allowFileAccess: true } })
       return extMgr.list()
     }
@@ -1122,26 +1183,10 @@ function urlFromArgs(argv) {
   return argv.slice(1).find((a) => /^(https?|file):/i.test(a) || (/\.(html?|pdf|svg|xml)$/i.test(a) && fs.existsSync(a)))
 }
 
-app.on('second-instance', (_e, argv) => {
-  const url = urlFromArgs(argv)
-  const win = ctx.activeWindow()
-  if (url) ctx.openUrl(ctx.toUrl(url))
-  else if (win) win.createTab({ url: ctx.newTabUrl() })
-  else ctx.createWindow()
-  if (win) {
-    if (win.win.isMinimized()) win.win.restore()
-    win.win.focus()
-  }
-})
-
-app.whenReady().then(async () => {
-  Menu.setApplicationMenu(null)
-  const ses = session.fromPartition('persist:metal')
-  ctx.session = ses
-
+// Thiết lập chung cho mọi phiên duyệt (thường và ẩn danh): user agent, chính tả, quyền, trang metal://.
+function setupBrowsingSession(ses) {
   const ua = cleanUserAgent(ses.getUserAgent())
   ses.setUserAgent(ua)
-  app.userAgentFallback = ua
 
   // Kiểm tra chính tả tiếng Việt + tiếng Anh.
   try {
@@ -1174,12 +1219,33 @@ app.whenReady().then(async () => {
   })
 
   registerMetalProtocol(ses)
-  ctx.applyDns()
   ses.registerPreloadScript({ id: 'metal-page-preload', type: 'frame', filePath: PAGE_PRELOAD })
+}
+
+app.on('second-instance', (_e, argv) => {
+  const url = urlFromArgs(argv)
+  const win = ctx.normalWindow()
+  if (url) ctx.openUrl(ctx.toUrl(url), { win })
+  else if (win) win.createTab({ url: ctx.newTabUrl(win) })
+  else ctx.createWindow()
+  if (win) {
+    if (win.win.isMinimized()) win.win.restore()
+    win.win.focus()
+  }
+})
+
+app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null)
+  const ses = session.fromPartition('persist:metal')
+  ctx.session = ses
+
+  setupBrowsingSession(ses)
+  app.userAgentFallback = ses.getUserAgent()
+  ctx.applyDns()
 
   ctx.downloads = new DownloadManager()
-  ctx.media = new MediaTools(ctx.downloads, ses)
-  ctx.media.attachSniffer()
+  ctx.media = new MediaTools(ctx.downloads, ses, path.join(VENDOR_DIR, 'bin'))
+  ctx.media.attachSniffer(ses)
   // Bắt được link media mới từ mạng: cập nhật nút "Tải video" của tab đó.
   ctx.media.on('found', (wcId) => {
     for (const w of ctx.windows) w.tabs.find((t) => t.id === wcId)?.scheduleMediaScan()
@@ -1208,8 +1274,9 @@ app.whenReady().then(async () => {
     session: ses,
     async createTab(details) {
       let win = details.windowId ? ctx.byBaseWindow.get(BaseWindow.fromId(details.windowId)) : null
-      win = win || ctx.activeWindow() || ctx.createWindow({ empty: true })
-      const tab = win.createTab({ url: details.url || ctx.newTabUrl(), active: details.active !== false, index: details.index })
+      if (win?.incognito) win = null
+      win = win || ctx.normalWindow() || ctx.createWindow({ empty: true })
+      const tab = win.createTab({ url: details.url || ctx.newTabUrl(win), active: details.active !== false, index: details.index })
       return [tab.wc, win.win]
     },
     selectTab(wc) {
@@ -1244,6 +1311,8 @@ app.whenReady().then(async () => {
   ses.registerPreloadScript({ id: 'metal-browser-alias-frame', type: 'frame', filePath: aliasPreload })
   ses.registerPreloadScript({ id: 'metal-browser-alias-sw', type: 'service-worker', filePath: aliasPreload })
   ctx.extensions.on('url-overrides-updated', () => ctx.broadcastState())
+
+  extMgr.installBundled()
 
   // Cài/cập nhật extension từ Chrome Web Store (cho phép cả Manifest V2 mà Chrome đã bỏ).
   try {

@@ -10,6 +10,7 @@ const TITLEBAR_HEIGHT = 38
 const THEME = {
   light: { color: '#dde3ec', symbolColor: '#2b3340' },
   dark: { color: '#1f232a', symbolColor: '#e6e9ef' },
+  incognito: { color: '#1e1b26', symbolColor: '#e8e3f3' },
 }
 
 class Tab {
@@ -20,7 +21,7 @@ class Tab {
       ? new WebContentsView({ webContents })
       : new WebContentsView({
           webPreferences: {
-            session: this.ctx.session,
+            session: win.session,
             sandbox: true,
             contextIsolation: true,
             spellcheck: true,
@@ -39,6 +40,8 @@ class Tab {
     this.pinned = pinned
     this.media = { count: 0, ytdlp: false }
     this.initialUrl = url || ''
+    // Cửa sổ ẩn danh không ghi lịch sử.
+    this.history = win.incognito ? null : win.ctx.history
     this.lastActive = Date.now()
     this.bind()
   }
@@ -49,12 +52,12 @@ class Tab {
 
     wc.on('page-title-updated', (_e, title) => {
       this.title = title
-      this.ctx.history.updateTitle(wc.getURL(), title)
+      this.history?.updateTitle(wc.getURL(), title)
       update()
     })
     wc.on('page-favicon-updated', (_e, favicons) => {
       this.favicon = favicons[0] || ''
-      this.ctx.history.updateFavicon(wc.getURL(), this.favicon)
+      this.history?.updateFavicon(wc.getURL(), this.favicon)
       update()
     })
     wc.on('did-start-loading', () => {
@@ -71,13 +74,13 @@ class Tab {
       this.crashed = false
       this.favicon = ''
       this.media = { count: 0, ytdlp: false }
-      if (httpCode < 400 || httpCode === undefined) this.ctx.history.add(url, wc.getTitle())
+      if (httpCode < 400 || httpCode === undefined) this.history?.add(url, wc.getTitle())
       update()
       this.win.scheduleSessionSave()
     })
     wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
       if (!isMainFrame) return
-      this.ctx.history.add(url, wc.getTitle())
+      this.history?.add(url, wc.getTitle())
       update()
       this.win.scheduleSessionSave()
       setTimeout(() => this.scanMedia(), 1500)
@@ -134,7 +137,7 @@ class Tab {
         overrideBrowserWindowOptions: {
           autoHideMenuBar: true,
           icon: ICON,
-          webPreferences: { session: this.ctx.session, sandbox: true, contextIsolation: true },
+          webPreferences: { session: this.win.session, sandbox: true, contextIsolation: true },
         },
       }
     }
@@ -214,8 +217,10 @@ class Tab {
 }
 
 class BrowserWin {
-  constructor(ctx, { bounds, maximized } = {}) {
+  constructor(ctx, { bounds, maximized, incognito = false } = {}) {
     this.ctx = ctx
+    this.incognito = incognito
+    this.session = incognito ? ctx.incognitoSession() : ctx.session
     this.tabs = []
     this.activeTab = null
     this.uiHeight = 112
@@ -234,14 +239,14 @@ class BrowserWin {
       show: false,
       icon: ICON,
       title: 'Metal Browser',
-      backgroundColor: dark ? '#1f232a' : '#dde3ec',
+      backgroundColor: incognito ? THEME.incognito.color : dark ? '#1f232a' : '#dde3ec',
       titleBarStyle: 'hidden',
-      titleBarOverlay: { ...(dark ? THEME.dark : THEME.light), height: TITLEBAR_HEIGHT },
+      titleBarOverlay: { ...this.theme(), height: TITLEBAR_HEIGHT },
     })
 
     this.ui = new WebContentsView({
       webPreferences: {
-        session: ctx.session,
+        session: this.session,
         preload: UI_PRELOAD,
         // Preload của UI cần require module của electron-chrome-extensions nên không chạy sandbox.
         sandbox: false,
@@ -251,7 +256,7 @@ class BrowserWin {
     })
     this.ui.setBackgroundColor('#00000000')
     this.win.contentView.addChildView(this.ui)
-    this.ui.webContents.loadFile(UI_HTML)
+    this.ui.webContents.loadFile(UI_HTML, { query: incognito ? { incognito: '1' } : {} })
     this.ui.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && this.ctx.handleShortcut(this, input, true)) event.preventDefault()
     })
@@ -267,7 +272,7 @@ class BrowserWin {
     this.win.on('unmaximize', () => this.sendState())
     this.win.on('focus', () => {
       this.ctx.lastFocused = this
-      if (this.activeTab && !this.activeTab.wc.isDestroyed()) {
+      if (this.activeTab && !this.activeTab.wc.isDestroyed() && !this.incognito) {
         try {
           this.ctx.extensions.selectTab(this.activeTab.wc)
         } catch {}
@@ -282,10 +287,15 @@ class BrowserWin {
     this.layout()
   }
 
+  theme() {
+    if (this.incognito) return THEME.incognito
+    return nativeTheme.shouldUseDarkColors ? THEME.dark : THEME.light
+  }
+
   applyTheme() {
     const dark = nativeTheme.shouldUseDarkColors
     try {
-      this.win.setTitleBarOverlay({ ...(dark ? THEME.dark : THEME.light), height: TITLEBAR_HEIGHT })
+      this.win.setTitleBarOverlay({ ...this.theme(), height: TITLEBAR_HEIGHT })
     } catch {}
   }
 
@@ -338,9 +348,10 @@ class BrowserWin {
         activeId: this.activeTab?.id ?? null,
         bookmarked: active ? this.ctx.bookmarks.has(active.url) : false,
         maximized: this.win.isMaximized(),
+        incognito: this.incognito,
         ...this.ctx.uiExtras(),
       })
-      if (this.activeTab) this.win.setTitle(`${this.activeTab.title} - Metal Browser`)
+      if (this.activeTab) this.win.setTitle(`${this.activeTab.title} - Metal Browser${this.incognito ? " (Ẩn danh)" : ""}`)
     }, 16)
   }
 
@@ -364,7 +375,7 @@ class BrowserWin {
     this.tabs.splice(at, 0, tab)
     tab.view.setVisible(false)
     this.win.contentView.addChildView(tab.view, 0)
-    this.ctx.extensions.addTab(tab.wc, this.win)
+    if (!this.incognito) this.ctx.extensions.addTab(tab.wc, this.win)
     if (url) tab.load(url)
     if (active || !this.activeTab) this.selectTab(tab)
     this.sendState()
@@ -387,9 +398,11 @@ class BrowserWin {
       tab.crashed = false
       tab.wc.reload()
     }
-    try {
-      this.ctx.extensions.selectTab(tab.wc)
-    } catch {}
+    if (!this.incognito) {
+      try {
+        this.ctx.extensions.selectTab(tab.wc)
+      } catch {}
+    }
     if (tab.displayUrl() === '') this.sendUi('focus-address')
     else tab.wc.focus()
     this.sendState()
@@ -399,7 +412,7 @@ class BrowserWin {
   closeTab(tab) {
     if (!tab || tab.win !== this) return
     const url = tab.wc.getURL()
-    if (url && !url.startsWith('metal://newtab')) {
+    if (url && !url.startsWith('metal://newtab') && !this.incognito) {
       this.ctx.closedTabs.push({ url, title: tab.title })
       if (this.ctx.closedTabs.length > 25) this.ctx.closedTabs.shift()
     }
@@ -456,7 +469,7 @@ class BrowserWin {
     const idx = this.tabs.indexOf(tab)
     const wc = tab.wc
     Menu.buildFromTemplate([
-      { label: 'Tab mới bên phải', click: () => this.createTab({ url: this.ctx.newTabUrl(), index: idx + 1 }) },
+      { label: 'Tab mới bên phải', click: () => this.createTab({ url: this.ctx.newTabUrl(this), index: idx + 1 }) },
       { type: 'separator' },
       { label: 'Tải lại', click: () => wc.reload() },
       { label: 'Nhân bản tab', click: () => this.createTab({ url: wc.getURL(), index: idx + 1 }) },

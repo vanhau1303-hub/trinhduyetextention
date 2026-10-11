@@ -36,6 +36,35 @@ body.dark {
   --shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
 }
 
+/* Cửa sổ ẩn danh: tông tím tối */
+body.incognito {
+  --strip-bg: #1e1b26;
+  --toolbar-bg: #2c2838;
+  --tab-active: #2c2838;
+  --tab-hover: rgba(255, 255, 255, 0.06);
+  --omni-bg: #1e1b26;
+  --omni-focus: #15131b;
+  --border: #3d3750;
+  --popover: #2c2838;
+  --accent: #b69cff;
+  --accent-soft: rgba(182, 156, 255, 0.16);
+}
+#incognito-badge {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  margin-right: 8px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(182, 156, 255, 0.16);
+  color: #d9ccff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 * { box-sizing: border-box; }
 
 html, body {

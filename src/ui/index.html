@@ -12,6 +12,7 @@
       <div id="tabs"></div>
       <button id="new-tab" class="icon-btn" title="Tab mới (Ctrl+T)"></button>
       <div class="drag-space"></div>
+      <div id="incognito-badge" class="hidden" title="Cửa sổ ẩn danh: không lưu lịch sử, cookie và dữ liệu trang sẽ bị xoá khi đóng hết cửa sổ ẩn danh. Extension không chạy ở đây."></div>
     </div>
 
     <div id="toolbar">
@@ -29,7 +30,7 @@
         <button id="btn-star" class="omni-btn" title="Đánh dấu trang này (Ctrl+D)"></button>
       </div>
 
-      <browser-action-list id="actions" alignment="bottom left"></browser-action-list>
+      <span id="actions-slot"></span>
       <button id="btn-extensions" class="icon-btn" title="Tiện ích mở rộng"></button>
       <button id="btn-adblock" class="icon-btn" title="Chặn quảng cáo"></button>
       <button id="btn-downloads" class="icon-btn hidden" title="Tải xuống (Ctrl+J)"></button>
